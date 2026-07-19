@@ -62,7 +62,7 @@ tar -xzf /tmp/monopoly-deploy.tgz -C server/game/public
 rm -f /tmp/monopoly-deploy.tgz
 echo "  веб: $(cat server/game/public/version.json)"
 
-cd /opt/livekit && docker compose up -d monopoly >/dev/null 2>&1
+cd /opt/livekit && docker compose restart monopoly >/dev/null 2>&1
 sleep 4
 docker compose ps --format '{{.Name}} {{.Status}}' | grep monopoly
 `;
