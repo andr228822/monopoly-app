@@ -46,10 +46,10 @@ export function App() {
           winnerId={game.snapshot.winnerId}
           lastRoll={game.lastRoll}
           lastMove={game.lastMove}
+          lastTurnStart={game.lastTurnStart}
           onRoll={game.rollDice}
           onBuy={game.buyProperty}
           onDecline={game.declineBuy}
-          onEndTurn={game.endTurn}
         />
       </div>
     );

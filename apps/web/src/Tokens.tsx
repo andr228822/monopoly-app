@@ -5,16 +5,17 @@ import { gridPos } from "./boardLayout";
 const STEP_MS = 220; // время одного шага фишки на соседнюю клетку
 
 export function Tokens({
-  players, colorOf, moveEvent,
+  players, colorOf, moveEvent, startDelayMs = 0,
 }: {
   players: PlayerView[];
   colorOf: (id: string) => string;
   moveEvent: MoveEvent | null;
+  startDelayMs?: number; // подождать конца анимации кубиков, прежде чем двигать фишку
 }) {
   // Отображаемая позиция каждого игрока — двигается пошагово, независимо от
   // «настоящей» p.position (та меняется мгновенно вместе с состоянием сервера).
   const [displayed, setDisplayed] = useState<Record<string, number>>({});
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seenMoveTs = useRef(0);
 
   // Новый игрок — сразу ставим на его текущую клетку (без анимации «от нуля»).
@@ -33,24 +34,33 @@ export function Tokens({
     if (!moveEvent || moveEvent.ts === seenMoveTs.current) return;
     seenMoveTs.current = moveEvent.ts;
 
-    const path: number[] = [];
-    let cur = moveEvent.from;
-    while (cur !== moveEvent.to) {
-      cur = (cur + 1) % 40;
-      path.push(cur);
-    }
-    if (path.length === 0) return;
+    const startTimer = setTimeout(() => {
+      // Телепорт (например, отправка в тюрьму за 3 дубля) — без пошагового обхода клеток.
+      if (moveEvent.direct) {
+        setDisplayed((prev) => ({ ...prev, [moveEvent.playerId]: moveEvent.to }));
+        return;
+      }
+      const path: number[] = [];
+      let cur = moveEvent.from;
+      while (cur !== moveEvent.to) {
+        cur = (cur + 1) % 40;
+        path.push(cur);
+      }
+      if (path.length === 0) return;
+      let i = 0;
+      const step = () => {
+        setDisplayed((prev) => ({ ...prev, [moveEvent.playerId]: path[i] }));
+        i++;
+        if (i < path.length) stepTimerRef.current = setTimeout(step, STEP_MS);
+      };
+      step();
+    }, startDelayMs);
 
-    let i = 0;
-    const step = () => {
-      setDisplayed((prev) => ({ ...prev, [moveEvent.playerId]: path[i] }));
-      i++;
-      if (i < path.length) timerRef.current = setTimeout(step, STEP_MS);
+    return () => {
+      clearTimeout(startTimer);
+      if (stepTimerRef.current) clearTimeout(stepTimerRef.current);
     };
-    if (timerRef.current) clearTimeout(timerRef.current);
-    step();
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [moveEvent]);
+  }, [moveEvent, startDelayMs]);
 
   return (
     <>

@@ -1,8 +1,9 @@
+import { useEffect, useState } from "react";
 import { BOARD, TileType } from "@monopoly/shared";
-import type { PlayerView, MoveEvent, RollEvent } from "./net/useGame";
+import type { PlayerView, MoveEvent, RollEvent, TurnStartEvent } from "./net/useGame";
 import { gridPos } from "./boardLayout";
 import { Tokens } from "./Tokens";
-import { Dice } from "./Dice";
+import { Dice, DICE_ANIMATION_MS } from "./Dice";
 
 const PLAYER_COLORS = ["#e63946", "#457b9d", "#f4a261", "#2a9d8f", "#e9c46a", "#9d4edd"];
 
@@ -13,8 +14,8 @@ const GROUP_COLORS: Record<string, string> = {
 
 export function Board({
   players, properties, currentPlayerId, mySessionId,
-  dice1, dice2, awaitingBuyTileId, phase, winnerId, lastRoll, lastMove,
-  onRoll, onBuy, onDecline, onEndTurn,
+  dice1, dice2, awaitingBuyTileId, phase, winnerId, lastRoll, lastMove, lastTurnStart,
+  onRoll, onBuy, onDecline,
 }: {
   players: PlayerView[];
   properties: Record<number, string>;
@@ -27,15 +28,26 @@ export function Board({
   winnerId: string;
   lastRoll: RollEvent | null;
   lastMove: MoveEvent | null;
+  lastTurnStart: TurnStartEvent | null;
   onRoll: () => void;
   onBuy: () => void;
   onDecline: () => void;
-  onEndTurn: () => void;
 }) {
   const colorOf = (playerId: string) => PLAYER_COLORS[players.findIndex((p) => p.id === playerId) % PLAYER_COLORS.length];
   const isMyTurn = currentPlayerId === mySessionId;
   const awaitingTile = awaitingBuyTileId !== 255 ? BOARD[awaitingBuyTileId] : null;
   const rolled = dice1 > 0 || dice2 > 0;
+
+  // Секундомер хода — тикаем раз в полсекунды, пока идёт партия.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (phase !== "playing") return;
+    const iv = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(iv);
+  }, [phase]);
+  const secondsLeft = lastTurnStart && lastTurnStart.playerId === currentPlayerId
+    ? Math.max(0, Math.ceil((lastTurnStart.deadline - now) / 1000))
+    : null;
 
   return (
     <div className="board">
@@ -61,7 +73,7 @@ export function Board({
         );
       })}
 
-      <Tokens players={players} colorOf={colorOf} moveEvent={lastMove} />
+      <Tokens players={players} colorOf={colorOf} moveEvent={lastMove} startDelayMs={DICE_ANIMATION_MS} />
 
       <div className="center">
         {phase === "game_over" ? (
@@ -70,22 +82,28 @@ export function Board({
           <>
             <p className="turn">
               {isMyTurn ? "Твой ход" : `Ходит: ${players.find((p) => p.id === currentPlayerId)?.name || "…"}`}
+              {secondsLeft !== null && <span className="timer"> ⏱ {secondsLeft}с</span>}
             </p>
             <div className="diceRow">
-              <Dice value={dice1 || 1} rollTs={lastRoll?.ts ?? 0} />
-              <Dice value={dice2 || 1} rollTs={lastRoll?.ts ?? 0} />
+              {/* Значение — из самого события броска (lastRoll), НЕ из dice1/dice2:
+                  синк состояния и это сообщение идут отдельными пакетами и могут
+                  прийти в любом порядке — стейт иногда ещё старый в момент броска. */}
+              <Dice value={lastRoll?.d1 ?? 1} rollTs={lastRoll?.ts ?? 0} />
+              <Dice value={lastRoll?.d2 ?? 1} rollTs={lastRoll?.ts ?? 0} />
             </div>
+            {rolled && lastRoll?.isDouble && <p className="doubleBadge">🎲 Дубль! Ещё бросок</p>}
             {isMyTurn && awaitingTile ? (
               <div className="buyBox">
                 <p>Купить «{awaitingTile.name}» за ${awaitingTile.price}?</p>
                 <button onClick={onBuy}>Купить</button>
                 <button onClick={onDecline}>Не покупать</button>
               </div>
-            ) : isMyTurn ? (
+            ) : isMyTurn && !rolled ? (
               <div className="buyBox">
-                <button onClick={onRoll} disabled={rolled}>🎲 Бросить кубики</button>
-                <button onClick={onEndTurn} disabled={!rolled}>Закончить ход</button>
+                <button onClick={onRoll}>🎲 Бросить кубики</button>
               </div>
+            ) : isMyTurn ? (
+              <p className="note">Ход завершится автоматически…</p>
             ) : null}
           </>
         )}

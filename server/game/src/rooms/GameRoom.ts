@@ -2,7 +2,7 @@ import { Room, Client } from "colyseus";
 import { GameState, Player, PropertyState } from "../schema/GameState";
 import { GAME_CONFIG, Phase, ClientMsg, ServerMsg, TileType } from "@monopoly/shared";
 import {
-  canStart, pushRateWindow, computeMove, isPurchasable, rentFor,
+  canStart, pushRateWindow, computeMove, isPurchasable, rentFor, isDouble,
   nextAlivePlayerId, resolveWinner, tileAt,
 } from "../logic";
 
@@ -11,6 +11,7 @@ interface CreateOptions {
   isPrivate?: boolean;
   maxPlayers?: number;
   code?: string;
+  turnMs?: number; // только для тестов — укоротить лимит хода
 }
 
 // Лёгкий анти-флуд: не больше N сообщений в окне на клиента.
@@ -23,6 +24,11 @@ export class GameRoom extends Room<GameState> {
   private msgRate = new Map<string, number[]>();
   // Порядок хода — фиксируется один раз при старте матча (не синкается).
   private turnOrder: string[] = [];
+  private turnMs: number = GAME_CONFIG.turnMs;
+  private turnTimer?: any;
+  private turnDoubles = 0; // подряд выпавших дублей у текущего игрока в этом ходу
+  // Что делать после разрешения клетки (может ждать решения о покупке — см. afterResolve).
+  private pendingResolution: "advance" | "reroll" | null = null;
 
   onCreate(options: CreateOptions = {}) {
     this.setState(new GameState());
@@ -32,6 +38,7 @@ export class GameRoom extends Room<GameState> {
     this.code = options.code || Math.random().toString(36).slice(2, 8).toUpperCase();
     this.state.code = this.code;
     if (options.isPrivate) this.setPrivate(true);
+    if (options.turnMs) this.turnMs = Math.min(Math.max(options.turnMs, 200), GAME_CONFIG.turnMs);
     this.syncMetadata();
 
     this.onMessage(ClientMsg.SetReady, (client, msg: { ready?: boolean }) => {
@@ -58,16 +65,7 @@ export class GameRoom extends Room<GameState> {
 
     this.onMessage(ClientMsg.DeclineBuy, (client) => {
       if (this.rateLimited(client)) return;
-      if (!this.isMyTurnWithPendingBuy(client)) return;
-      this.state.awaitingBuyTileId = 255;
-    });
-
-    this.onMessage(ClientMsg.EndTurn, (client) => {
-      if (this.rateLimited(client)) return;
-      if (this.state.phase !== Phase.Playing) return;
-      if (client.sessionId !== this.state.currentPlayerId) return;
-      if (this.state.awaitingBuyTileId !== 255) return; // сначала реши покупку
-      this.advanceTurn();
+      this.handleDeclineBuy(client);
     });
   }
 
@@ -162,7 +160,26 @@ export class GameRoom extends Room<GameState> {
     this.state.dice2 = 0;
     this.state.awaitingBuyTileId = 255;
     this.state.currentPlayerId = this.turnOrder[0] || "";
+    this.turnDoubles = 0;
+    this.pendingResolution = null;
     this.setPhase(Phase.Playing);
+    this.startTurnTimer();
+  }
+
+  // ── Таймер хода: 60с на весь ход (включая решение о покупке). Не успел — пропуск. ──
+  private startTurnTimer() {
+    if (this.turnTimer) { this.turnTimer.clear(); this.turnTimer = undefined; }
+    if (!this.state.currentPlayerId) return;
+    const deadline = Date.now() + this.turnMs;
+    this.broadcast(ServerMsg.TurnStarted, { playerId: this.state.currentPlayerId, deadline });
+    this.turnTimer = this.clock.setTimeout(() => this.handleTurnTimeout(), this.turnMs);
+  }
+
+  private handleTurnTimeout() {
+    if (this.state.phase !== Phase.Playing) return;
+    this.state.awaitingBuyTileId = 255; // не успел решить — считаем отказом
+    this.pendingResolution = null;
+    this.advanceTurn();
   }
 
   private isMyTurnWithPendingBuy(client: Client): boolean {
@@ -184,8 +201,20 @@ export class GameRoom extends Room<GameState> {
     const d2 = 1 + Math.floor(Math.random() * 6);
     this.state.dice1 = d1;
     this.state.dice2 = d2;
-    this.broadcast(ServerMsg.DiceRolled, { playerId: p.id, d1, d2 });
+    const double = isDouble(d1, d2);
+    if (double) this.turnDoubles++;
+    this.broadcast(ServerMsg.DiceRolled, { playerId: p.id, d1, d2, isDouble: double });
 
+    // 3 дубля подряд — сразу в тюрьму, без учёта клетки, куда указывали кубики.
+    if (double && this.turnDoubles >= 3) {
+      const from = p.position;
+      p.position = GAME_CONFIG.jailTileId;
+      this.broadcast(ServerMsg.PlayerMoved, { playerId: p.id, from, to: GAME_CONFIG.jailTileId, passedGo: false, direct: true });
+      this.scheduleResolution("advance", p.id);
+      return;
+    }
+
+    this.pendingResolution = double ? "reroll" : "advance";
     const from = p.position;
     const { to, passedGo } = computeMove(p.position, d1, d2);
     p.position = to;
@@ -193,6 +222,7 @@ export class GameRoom extends Room<GameState> {
     this.broadcast(ServerMsg.PlayerMoved, { playerId: p.id, from, to, passedGo });
 
     this.resolveTile(p, d1, d2);
+    if (this.state.awaitingBuyTileId === 255) this.afterResolve(p);
   }
 
   private resolveTile(p: Player, d1: number, d2: number) {
@@ -207,7 +237,7 @@ export class GameRoom extends Room<GameState> {
         if (owner && !owner.bankrupt) this.payRent(p, owner, rentFor(tile, d1, d2), tile.id);
       }
     } else if (tile.type === TileType.Tax) {
-      this.chargeMoney(p, tile.tax || 0, "");
+      this.chargeMoney(p, tile.tax || 0);
     }
     // go/chance/chest/jail/free_parking/go_to_jail — пока без эффекта (Фаза 2+).
   }
@@ -219,8 +249,8 @@ export class GameRoom extends Room<GameState> {
     if (payer.money < 0) this.bankruptPlayer(payer);
   }
 
-  // Налог уходит в банк (creditorId="" — просто теряются деньги, никому не зачисляются).
-  private chargeMoney(p: Player, amount: number, _creditorId: string) {
+  // Налог уходит в банк — просто теряются деньги, никому не зачисляются.
+  private chargeMoney(p: Player, amount: number) {
     p.money -= amount;
     if (p.money < 0) this.bankruptPlayer(p);
   }
@@ -239,6 +269,7 @@ export class GameRoom extends Room<GameState> {
       this.broadcast(ServerMsg.GameOver, { winnerId: winner });
       console.log(`[room ${this.roomId}] 🏆 Победитель: ${winner || "никто"}`);
     } else if (this.state.currentPlayerId === p.id) {
+      this.pendingResolution = null;
       this.advanceTurn();
     }
   }
@@ -259,6 +290,41 @@ export class GameRoom extends Room<GameState> {
     }
     prop.ownerId = p.id;
     this.state.awaitingBuyTileId = 255;
+    this.afterResolve(p);
+  }
+
+  private handleDeclineBuy(client: Client) {
+    if (!this.isMyTurnWithPendingBuy(client)) return;
+    const p = this.state.players.get(client.sessionId);
+    if (!p) return;
+    this.state.awaitingBuyTileId = 255;
+    this.afterResolve(p);
+  }
+
+  // Клетка разрешена (и решение о покупке, если было, принято) — либо ещё один
+  // бросок тому же игроку (дубль), либо ход переходит дальше. С паузой, чтобы
+  // на клиенте успела доиграть анимация кубиков/движения.
+  private afterResolve(p: Player) {
+    const action = this.pendingResolution;
+    this.pendingResolution = null;
+    this.scheduleResolution(action === "reroll" ? "reroll" : "advance", p.id);
+  }
+
+  private scheduleResolution(action: "advance" | "reroll", playerId: string) {
+    this.clock.setTimeout(() => {
+      if (this.state.phase !== Phase.Playing) return;
+      if (this.state.currentPlayerId !== playerId) return; // ход уже ушёл (например, банкротство)
+      if (action === "reroll") this.continueTurn();
+      else this.advanceTurn();
+    }, GAME_CONFIG.resolveDelayMs);
+  }
+
+  // Игрок остаётся тем же (дубль) — просто разрешаем новый бросок.
+  private continueTurn() {
+    this.state.dice1 = 0;
+    this.state.dice2 = 0;
+    this.state.awaitingBuyTileId = 255;
+    this.startTurnTimer();
   }
 
   private advanceTurn() {
@@ -269,5 +335,7 @@ export class GameRoom extends Room<GameState> {
     this.state.dice1 = 0;
     this.state.dice2 = 0;
     this.state.awaitingBuyTileId = 255;
+    this.turnDoubles = 0;
+    this.startTurnTimer();
   }
 }

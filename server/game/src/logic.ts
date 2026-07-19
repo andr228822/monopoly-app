@@ -63,6 +63,11 @@ export function nextAlivePlayerId(
   return "";
 }
 
+// Дубль — оба кубика показали одно и то же значение (даёт лишний бросок).
+export function isDouble(d1: number, d2: number): boolean {
+  return d1 === d2;
+}
+
 // Победитель: если живых (не банкрот) участников <= 1 — вернуть его id ("" если никого).
 export function resolveWinner<T extends { id: string; bankrupt?: boolean }>(players: T[]): string | null {
   const alive = players.filter((p) => !p.bankrupt);

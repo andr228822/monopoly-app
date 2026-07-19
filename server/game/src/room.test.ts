@@ -61,7 +61,7 @@ describe("GameRoom (интеграция)", () => {
     await a.leave(); await b.leave();
   });
 
-  it("ход: бросок двигает игрока, покупка недвижимости, конец хода передаёт очередь", async () => {
+  it("ход: бросок двигает игрока, покупка недвижимости, ход передаётся автоматически", async () => {
     const room = await colyseus.createRoom("game", {});
     const a = await colyseus.connectTo(room, { name: "A" });
     const b = await colyseus.connectTo(room, { name: "B" });
@@ -75,7 +75,7 @@ describe("GameRoom (интеграция)", () => {
     assert.equal(room.state.phase, "playing");
     assert.equal(room.state.currentPlayerId, a.sessionId); // первый вошедший ходит первым
 
-    let restore = mockDice(2, 3); // 0+2+3=5 -> клетка 5 (ж.д., цена 200)
+    let restore = mockDice(2, 3); // 0+2+3=5 -> клетка 5 (ж.д., цена 200), не дубль
     a.send(ClientMsg.RollDice);
     await settle(room);
     restore();
@@ -87,17 +87,14 @@ describe("GameRoom (интеграция)", () => {
     await settle(room);
     assert.equal(room.state.currentPlayerId, a.sessionId);
 
-    a.send(ClientMsg.EndTurn); // нельзя закончить ход, пока не решена покупка
-    await settle(room);
-    assert.equal(room.state.currentPlayerId, a.sessionId);
-
     a.send(ClientMsg.BuyProperty);
     await settle(room);
     assert.equal(room.state.properties.get("5").ownerId, a.sessionId);
     assert.equal(pa.money, GAME_CONFIG.startingMoney - 200);
     assert.equal(room.state.awaitingBuyTileId, 255);
 
-    a.send(ClientMsg.EndTurn);
+    // Ручной "конец хода" не нужен — сервер сам передаёт очередь после паузы.
+    await new Promise((r) => setTimeout(r, GAME_CONFIG.resolveDelayMs + 200));
     await settle(room);
     assert.equal(room.state.currentPlayerId, b.sessionId);
 
@@ -116,13 +113,12 @@ describe("GameRoom (интеграция)", () => {
     await new Promise((r) => setTimeout(r, GAME_CONFIG.countdownMs + 200));
     await settle(room);
 
-    let restore = mockDice(2, 3); // A -> клетка 5 (ж.д., 200)
+    let restore = mockDice(2, 3); // A -> клетка 5 (ж.д., 200), не дубль
     a.send(ClientMsg.RollDice);
     await settle(room);
     restore();
     a.send(ClientMsg.BuyProperty);
-    await settle(room);
-    a.send(ClientMsg.EndTurn);
+    await new Promise((r) => setTimeout(r, GAME_CONFIG.resolveDelayMs + 200));
     await settle(room);
     assert.equal(room.state.currentPlayerId, b.sessionId);
 
@@ -136,6 +132,95 @@ describe("GameRoom (интеграция)", () => {
     assert.equal(pb.bankrupt, true);
     assert.equal(room.state.phase, "game_over");
     assert.equal(room.state.winnerId, a.sessionId);
+
+    await a.leave(); await b.leave();
+  });
+
+  it("дубль: тот же игрок бросает ещё раз, ход не передаётся", async () => {
+    const room = await colyseus.createRoom("game", {});
+    const a = await colyseus.connectTo(room, { name: "A" });
+    const b = await colyseus.connectTo(room, { name: "B" });
+    await settle(room);
+    a.send(ClientMsg.SetReady, { ready: true });
+    b.send(ClientMsg.SetReady, { ready: true });
+    await settle(room);
+    a.send(ClientMsg.StartGame);
+    await new Promise((r) => setTimeout(r, GAME_CONFIG.countdownMs + 200));
+    await settle(room);
+
+    let restore = mockDice(3, 3); // дубль -> клетка 6 (недвижимость, но денег хватает — покупка спросится)
+    a.send(ClientMsg.RollDice);
+    await settle(room);
+    restore();
+    a.send(ClientMsg.DeclineBuy); // не покупаем, чтобы не мешало проверке
+
+    await new Promise((r) => setTimeout(r, GAME_CONFIG.resolveDelayMs + 200));
+    await settle(room);
+    // Дубль — ход остался у A, кубики сброшены для нового броска.
+    assert.equal(room.state.currentPlayerId, a.sessionId);
+    assert.equal(room.state.dice1, 0);
+    assert.equal(room.state.dice2, 0);
+
+    await a.leave(); await b.leave();
+  });
+
+  it("3 дубля подряд отправляют в тюрьму, ход переходит дальше", async () => {
+    const room = await colyseus.createRoom("game", {});
+    const a = await colyseus.connectTo(room, { name: "A" });
+    const b = await colyseus.connectTo(room, { name: "B" });
+    await settle(room);
+    a.send(ClientMsg.SetReady, { ready: true });
+    b.send(ClientMsg.SetReady, { ready: true });
+    await settle(room);
+    a.send(ClientMsg.StartGame);
+    await new Promise((r) => setTimeout(r, GAME_CONFIG.countdownMs + 200));
+    await settle(room);
+
+    for (let i = 0; i < 2; i++) {
+      const restore = mockDice(2, 2); // дубль
+      a.send(ClientMsg.RollDice);
+      await settle(room);
+      restore();
+      if (room.state.awaitingBuyTileId !== 255) a.send(ClientMsg.DeclineBuy);
+      await new Promise((r) => setTimeout(r, GAME_CONFIG.resolveDelayMs + 200));
+      await settle(room);
+      assert.equal(room.state.currentPlayerId, a.sessionId); // всё ещё её ход (1-й и 2-й дубль)
+    }
+
+    const restore = mockDice(5, 5); // 3-й дубль подряд -> тюрьма
+    a.send(ClientMsg.RollDice);
+    await settle(room);
+    restore();
+    const pa = room.state.players.get(a.sessionId);
+    assert.equal(pa.position, GAME_CONFIG.jailTileId);
+
+    await new Promise((r) => setTimeout(r, GAME_CONFIG.resolveDelayMs + 200));
+    await settle(room);
+    assert.equal(room.state.currentPlayerId, b.sessionId); // 3 дубля — доп. хода нет, очередь дальше
+
+    await a.leave(); await b.leave();
+  });
+
+  it("таймер хода: не успел походить — ход пропускается автоматически", async () => {
+    // turnMs=500 с запасом от +200мс буфера ожидания countdown — иначе первая
+    // проверка попадает точно на границу истечения таймера (гонка).
+    const room = await colyseus.createRoom("game", { turnMs: 500 });
+    const a = await colyseus.connectTo(room, { name: "A" });
+    const b = await colyseus.connectTo(room, { name: "B" });
+    await settle(room);
+    a.send(ClientMsg.SetReady, { ready: true });
+    b.send(ClientMsg.SetReady, { ready: true });
+    await settle(room);
+    a.send(ClientMsg.StartGame);
+    await new Promise((r) => setTimeout(r, GAME_CONFIG.countdownMs + 200));
+    await settle(room);
+    assert.equal(room.state.currentPlayerId, a.sessionId);
+
+    // A ничего не делает — таймер (500мс) должен сам передать ход к B
+    // (проверяем в окне ПОСЛЕ истечения таймера A, но ДО истечения таймера B).
+    await new Promise((r) => setTimeout(r, 650));
+    await settle(room);
+    assert.equal(room.state.currentPlayerId, b.sessionId);
 
     await a.leave(); await b.leave();
   });

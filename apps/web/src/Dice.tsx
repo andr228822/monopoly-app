@@ -1,8 +1,9 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // Псевдо-3D кубик на CSS-трансформах: настоящий куб из 6 граней (transform-style:
-// preserve-3d), при броске крутится на несколько оборотов и падает с отскоком,
-// останавливаясь на нужной грани. Без внешних библиотек/физики — чистый CSS.
+// preserve-3d). При новом броске (rollTs меняется) — «прилетает» через доску со
+// случайным разлётом/тумблингом (см. @keyframes diceFall) и крутится на несколько
+// оборотов, останавливаясь на нужной грани. Без внешних библиотек/физики.
 
 const DOT_PATTERNS: Record<number, number[]> = {
   1: [4],
@@ -14,7 +15,6 @@ const DOT_PATTERNS: Record<number, number[]> = {
 };
 
 // Инверсия положения грани — какой поворот куба выводит эту грань вперёд.
-// Значения по осям X/Y в градусах [0..350], нормализованные (отрицательные -> +360).
 const TARGET_ROTATION: Record<number, { x: number; y: number }> = {
   1: { x: 0, y: 0 },
   2: { x: 90, y: 0 },
@@ -43,17 +43,36 @@ function nextAngle(prevTotal: number, target: number): number {
 }
 
 export function Dice({ value, rollTs }: { value: number; rollTs: number }) {
-  const rotRef = useRef({ x: 0, y: 0 });
-  if (value >= 1 && value <= 6) {
-    const target = TARGET_ROTATION[value];
-    rotRef.current = { x: nextAngle(rotRef.current.x, target.x), y: nextAngle(rotRef.current.y, target.y) };
-  }
-  const { x, y } = rotRef.current;
+  const [rot, setRot] = useState({ x: 0, y: 0 });
+  const lastTs = useRef(0);
+  const fallRef = useRef<HTMLDivElement | null>(null);
+
+  // Реагируем ТОЛЬКО на настоящий новый бросок (rollTs) — не на любое изменение
+  // value (иначе кубик ложно крутится, когда сервер сбрасывает dice в 0 при смене хода).
+  useEffect(() => {
+    if (!rollTs || rollTs === lastTs.current) return;
+    lastTs.current = rollTs;
+    const v = value >= 1 && value <= 6 ? value : 1;
+    const target = TARGET_ROTATION[v];
+    setRot((prev) => ({ x: nextAngle(prev.x, target.x), y: nextAngle(prev.y, target.y) }));
+
+    // Случайный разлёт «броска» — куда кубик прилетает на этот раз.
+    const el = fallRef.current;
+    if (el) {
+      el.style.setProperty("--fx", `${(Math.random() * 2 - 1) * 160}px`);
+      el.style.setProperty("--fy", `${-(120 + Math.random() * 70)}px`);
+      el.style.setProperty("--frot", `${(Math.random() * 2 - 1) * 70}deg`);
+      // Перезапуск CSS keyframe-анимации без ремаунта (иначе куб потерял бы transition).
+      el.style.animation = "none";
+      void el.offsetWidth;
+      el.style.animation = "";
+    }
+  }, [rollTs, value]);
 
   return (
-    <div className="diceFall" key={rollTs}>
+    <div className="diceFall" ref={fallRef}>
       <div className="diceScene">
-        <div className="diceCube" style={{ transform: `rotateX(${x}deg) rotateY(${y}deg)` }}>
+        <div className="diceCube" style={{ transform: `rotateX(${rot.x}deg) rotateY(${rot.y}deg)` }}>
           <Face value={1} transform="translateZ(20px)" />
           <Face value={6} transform="rotateY(180deg) translateZ(20px)" />
           <Face value={3} transform="rotateY(90deg) translateZ(20px)" />
@@ -65,3 +84,7 @@ export function Dice({ value, rollTs }: { value: number; rollTs: number }) {
     </div>
   );
 }
+
+// Сколько реально длится анимация одного броска (сумма разлёта+тумблинга) — чтобы
+// синхронизировать старт движения фишки (Tokens.tsx) через Board.tsx.
+export const DICE_ANIMATION_MS = 1000;

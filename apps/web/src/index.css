@@ -83,6 +83,9 @@ li { padding: 6px 0; border-bottom: 1px solid #2c6b2c; }
   border-radius: 8px;
 }
 .turn { font-size: 20px; font-weight: 800; }
+.timer { font-size: 14px; font-weight: 700; color: #f4a261; }
+.doubleBadge { color: #c8f250; font-weight: 800; }
+.note { color: #9db89a; font-size: 13px; }
 .winner { font-size: 24px; font-weight: 800; color: #c8f250; }
 .buyBox { display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .players { min-width: 200px; }
@@ -91,13 +94,16 @@ li { padding: 6px 0; border-bottom: 1px solid #2c6b2c; }
 /* ── Кубики: настоящий 3D-куб на CSS-трансформах ── */
 .diceRow { display: flex; gap: 20px; }
 .diceFall {
-  animation: diceFall 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+  --fx: 40px; --fy: -110px; --frot: 40deg;
+  animation: diceFall 0.7s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
+/* Бросок «через доску»: кубик прилетает со случайного направления (--fx/--fy),
+   кувыркаясь (--frot), и с лёгким отскоком оседает в центре. */
 @keyframes diceFall {
-  0% { transform: translateY(-90px) scale(0.7); opacity: 0; }
-  60% { transform: translateY(6px) scale(1); opacity: 1; }
-  80% { transform: translateY(-4px); }
-  100% { transform: translateY(0); }
+  0%   { transform: translate(var(--fx), var(--fy)) rotate(var(--frot)) scale(0.6); opacity: 0; }
+  55%  { transform: translate(calc(var(--fx) * 0.06), 10px) rotate(calc(var(--frot) * 0.1)) scale(1.05); opacity: 1; }
+  75%  { transform: translate(0, -6px) rotate(0deg) scale(1); }
+  100% { transform: translate(0, 0) rotate(0deg) scale(1); }
 }
 .diceScene { width: 44px; height: 44px; perspective: 300px; }
 .diceCube {

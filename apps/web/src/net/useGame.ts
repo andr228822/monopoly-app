@@ -33,8 +33,9 @@ export type Status = "idle" | "connecting" | "connected" | "error";
 
 // Разовые события для анимации (бросок/движение) — отдельно от синка состояния,
 // чтобы клиент мог проиграть анимацию, а не просто мгновенно отразить конечные значения.
-export interface RollEvent { playerId: string; d1: number; d2: number; ts: number }
-export interface MoveEvent { playerId: string; from: number; to: number; passedGo: boolean; ts: number }
+export interface RollEvent { playerId: string; d1: number; d2: number; isDouble: boolean; ts: number }
+export interface MoveEvent { playerId: string; from: number; to: number; passedGo: boolean; direct?: boolean; ts: number }
+export interface TurnStartEvent { playerId: string; deadline: number; ts: number }
 
 const EMPTY: GameSnapshot = {
   phase: Phase.Lobby, lobbyName: "", code: "", maxPlayers: 6, hostId: "", players: [],
@@ -49,6 +50,7 @@ export function useGame() {
   const [mySessionId, setMySessionId] = useState("");
   const [lastRoll, setLastRoll] = useState<RollEvent | null>(null);
   const [lastMove, setLastMove] = useState<MoveEvent | null>(null);
+  const [lastTurnStart, setLastTurnStart] = useState<TurnStartEvent | null>(null);
   const roomRef = useRef<Room | null>(null);
   const clientRef = useRef<Client | null>(null);
 
@@ -90,11 +92,14 @@ export function useGame() {
     roomRef.current = room;
     setMySessionId(room.sessionId);
     room.onStateChange(() => syncFromRoom(room));
-    room.onMessage(ServerMsg.DiceRolled, (m: { playerId: string; d1: number; d2: number }) => {
+    room.onMessage(ServerMsg.DiceRolled, (m: { playerId: string; d1: number; d2: number; isDouble: boolean }) => {
       setLastRoll({ ...m, ts: Date.now() });
     });
-    room.onMessage(ServerMsg.PlayerMoved, (m: { playerId: string; from: number; to: number; passedGo: boolean }) => {
+    room.onMessage(ServerMsg.PlayerMoved, (m: { playerId: string; from: number; to: number; passedGo: boolean; direct?: boolean }) => {
       setLastMove({ ...m, ts: Date.now() });
+    });
+    room.onMessage(ServerMsg.TurnStarted, (m: { playerId: string; deadline: number }) => {
+      setLastTurnStart({ ...m, ts: Date.now() });
     });
     room.onLeave(() => {
       roomRef.current = null;
@@ -144,9 +149,6 @@ export function useGame() {
   const declineBuy = useCallback(() => {
     roomRef.current?.send(ClientMsg.DeclineBuy);
   }, []);
-  const endTurn = useCallback(() => {
-    roomRef.current?.send(ClientMsg.EndTurn);
-  }, []);
 
   const leave = useCallback(() => {
     try { roomRef.current?.leave(); } catch {}
@@ -158,9 +160,9 @@ export function useGame() {
   useEffect(() => () => { try { roomRef.current?.leave(); } catch {} }, []);
 
   return {
-    status, error, snapshot, mySessionId, lastRoll, lastMove,
+    status, error, snapshot, mySessionId, lastRoll, lastMove, lastTurnStart,
     createGame, joinByCode, setReady, startGame,
-    rollDice, buyProperty, declineBuy, endTurn,
+    rollDice, buyProperty, declineBuy,
     leave,
   };
 }

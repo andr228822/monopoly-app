@@ -16,7 +16,6 @@ export const ClientMsg = {
   RollDice: "roll_dice",
   BuyProperty: "buy_property",
   DeclineBuy: "decline_buy",
-  EndTurn: "end_turn",
 } as const;
 
 export const ServerMsg = {
@@ -26,10 +25,14 @@ export const ServerMsg = {
   RentPaid: "rent_paid",
   PlayerBankrupt: "player_bankrupt",
   GameOver: "game_over",
+  TurnStarted: "turn_started",
 } as const;
 
-export interface DiceRolledPayload { playerId: string; d1: number; d2: number }
-export interface PlayerMovedPayload { playerId: string; from: number; to: number; passedGo: boolean }
+export interface DiceRolledPayload { playerId: string; d1: number; d2: number; isDouble: boolean }
+// direct=true — телепорт (например, отправка в тюрьму за 3 дубля): клиент не идёт
+// пошагово по клеткам, а сразу переставляет фишку.
+export interface PlayerMovedPayload { playerId: string; from: number; to: number; passedGo: boolean; direct?: boolean }
 export interface RentPaidPayload { fromId: string; toId: string; amount: number; tileId: number }
 export interface PlayerBankruptPayload { playerId: string }
 export interface GameOverPayload { winnerId: string }
+export interface TurnStartedPayload { playerId: string; deadline: number }
