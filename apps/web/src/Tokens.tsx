@@ -1,0 +1,81 @@
+import { useEffect, useRef, useState } from "react";
+import type { PlayerView, MoveEvent } from "./net/useGame";
+import { gridPos } from "./boardLayout";
+
+const STEP_MS = 220; // время одного шага фишки на соседнюю клетку
+
+export function Tokens({
+  players, colorOf, moveEvent,
+}: {
+  players: PlayerView[];
+  colorOf: (id: string) => string;
+  moveEvent: MoveEvent | null;
+}) {
+  // Отображаемая позиция каждого игрока — двигается пошагово, независимо от
+  // «настоящей» p.position (та меняется мгновенно вместе с состоянием сервера).
+  const [displayed, setDisplayed] = useState<Record<string, number>>({});
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seenMoveTs = useRef(0);
+
+  // Новый игрок — сразу ставим на его текущую клетку (без анимации «от нуля»).
+  useEffect(() => {
+    setDisplayed((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const p of players) {
+        if (!(p.id in next)) { next[p.id] = p.position; changed = true; }
+      }
+      return changed ? next : prev;
+    });
+  }, [players]);
+
+  useEffect(() => {
+    if (!moveEvent || moveEvent.ts === seenMoveTs.current) return;
+    seenMoveTs.current = moveEvent.ts;
+
+    const path: number[] = [];
+    let cur = moveEvent.from;
+    while (cur !== moveEvent.to) {
+      cur = (cur + 1) % 40;
+      path.push(cur);
+    }
+    if (path.length === 0) return;
+
+    let i = 0;
+    const step = () => {
+      setDisplayed((prev) => ({ ...prev, [moveEvent.playerId]: path[i] }));
+      i++;
+      if (i < path.length) timerRef.current = setTimeout(step, STEP_MS);
+    };
+    if (timerRef.current) clearTimeout(timerRef.current);
+    step();
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [moveEvent]);
+
+  return (
+    <>
+      {players.filter((p) => !p.bankrupt).map((p, i) => {
+        const tile = displayed[p.id] ?? p.position;
+        const { col, row } = gridPos(tile);
+        const leftPct = ((col - 1 + 0.5) / 11) * 100;
+        const topPct = ((row - 1 + 0.5) / 11) * 100;
+        // Небольшой разброс, чтобы фишки на одной клетке не сливались в одну точку.
+        const dx = (i % 3) * 8 - 8;
+        const dy = (Math.floor(i / 3) % 2) * 8 - 4;
+        return (
+          <div
+            key={p.id}
+            className="token"
+            title={p.name}
+            style={{
+              left: `${leftPct}%`,
+              top: `${topPct}%`,
+              background: colorOf(p.id),
+              transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`,
+            }}
+          />
+        );
+      })}
+    </>
+  );
+}

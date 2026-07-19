@@ -44,6 +44,8 @@ export function App() {
           awaitingBuyTileId={game.snapshot.awaitingBuyTileId}
           phase={game.snapshot.phase}
           winnerId={game.snapshot.winnerId}
+          lastRoll={game.lastRoll}
+          lastMove={game.lastMove}
           onRoll={game.rollDice}
           onBuy={game.buyProperty}
           onDecline={game.declineBuy}

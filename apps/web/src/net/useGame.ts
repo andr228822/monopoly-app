@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Client, Room } from "colyseus.js";
-import { ClientMsg, Phase } from "@monopoly/shared";
+import { ClientMsg, ServerMsg, Phase } from "@monopoly/shared";
 import { SERVER_ENDPOINT, TOKEN_BASE } from "./config";
 
 export interface PlayerView {
@@ -31,6 +31,11 @@ export interface GameSnapshot {
 
 export type Status = "idle" | "connecting" | "connected" | "error";
 
+// Разовые события для анимации (бросок/движение) — отдельно от синка состояния,
+// чтобы клиент мог проиграть анимацию, а не просто мгновенно отразить конечные значения.
+export interface RollEvent { playerId: string; d1: number; d2: number; ts: number }
+export interface MoveEvent { playerId: string; from: number; to: number; passedGo: boolean; ts: number }
+
 const EMPTY: GameSnapshot = {
   phase: Phase.Lobby, lobbyName: "", code: "", maxPlayers: 6, hostId: "", players: [],
   currentPlayerId: "", dice1: 0, dice2: 0, awaitingBuyTileId: 255, properties: {}, winnerId: "",
@@ -42,6 +47,8 @@ export function useGame() {
   const [error, setError] = useState("");
   const [snapshot, setSnapshot] = useState<GameSnapshot>(EMPTY);
   const [mySessionId, setMySessionId] = useState("");
+  const [lastRoll, setLastRoll] = useState<RollEvent | null>(null);
+  const [lastMove, setLastMove] = useState<MoveEvent | null>(null);
   const roomRef = useRef<Room | null>(null);
   const clientRef = useRef<Client | null>(null);
 
@@ -83,6 +90,12 @@ export function useGame() {
     roomRef.current = room;
     setMySessionId(room.sessionId);
     room.onStateChange(() => syncFromRoom(room));
+    room.onMessage(ServerMsg.DiceRolled, (m: { playerId: string; d1: number; d2: number }) => {
+      setLastRoll({ ...m, ts: Date.now() });
+    });
+    room.onMessage(ServerMsg.PlayerMoved, (m: { playerId: string; from: number; to: number; passedGo: boolean }) => {
+      setLastMove({ ...m, ts: Date.now() });
+    });
     room.onLeave(() => {
       roomRef.current = null;
       setStatus("idle");
@@ -145,7 +158,7 @@ export function useGame() {
   useEffect(() => () => { try { roomRef.current?.leave(); } catch {} }, []);
 
   return {
-    status, error, snapshot, mySessionId,
+    status, error, snapshot, mySessionId, lastRoll, lastMove,
     createGame, joinByCode, setReady, startGame,
     rollDice, buyProperty, declineBuy, endTurn,
     leave,

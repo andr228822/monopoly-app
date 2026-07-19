@@ -1,5 +1,8 @@
 import { BOARD, TileType } from "@monopoly/shared";
-import type { PlayerView } from "./net/useGame";
+import type { PlayerView, MoveEvent, RollEvent } from "./net/useGame";
+import { gridPos } from "./boardLayout";
+import { Tokens } from "./Tokens";
+import { Dice } from "./Dice";
 
 const PLAYER_COLORS = ["#e63946", "#457b9d", "#f4a261", "#2a9d8f", "#e9c46a", "#9d4edd"];
 
@@ -8,21 +11,9 @@ const GROUP_COLORS: Record<string, string> = {
   red: "#e63946", yellow: "#f9d342", green: "#2a9d8f", darkblue: "#1d3557",
 };
 
-// Позиция клетки id (0-39) в сетке 11x11 (по периметру, против часовой стрелки от GO).
-function gridPos(id: number): { col: number; row: number } {
-  if (id === 0) return { col: 11, row: 11 };
-  if (id <= 9) return { col: 11 - id, row: 11 };
-  if (id === 10) return { col: 1, row: 11 };
-  if (id <= 19) return { col: 1, row: 21 - id };
-  if (id === 20) return { col: 1, row: 1 };
-  if (id <= 29) return { col: id - 19, row: 1 };
-  if (id === 30) return { col: 11, row: 1 };
-  return { col: 11, row: id - 29 };
-}
-
 export function Board({
   players, properties, currentPlayerId, mySessionId,
-  dice1, dice2, awaitingBuyTileId, phase, winnerId,
+  dice1, dice2, awaitingBuyTileId, phase, winnerId, lastRoll, lastMove,
   onRoll, onBuy, onDecline, onEndTurn,
 }: {
   players: PlayerView[];
@@ -34,6 +25,8 @@ export function Board({
   awaitingBuyTileId: number;
   phase: string;
   winnerId: string;
+  lastRoll: RollEvent | null;
+  lastMove: MoveEvent | null;
   onRoll: () => void;
   onBuy: () => void;
   onDecline: () => void;
@@ -42,13 +35,13 @@ export function Board({
   const colorOf = (playerId: string) => PLAYER_COLORS[players.findIndex((p) => p.id === playerId) % PLAYER_COLORS.length];
   const isMyTurn = currentPlayerId === mySessionId;
   const awaitingTile = awaitingBuyTileId !== 255 ? BOARD[awaitingBuyTileId] : null;
+  const rolled = dice1 > 0 || dice2 > 0;
 
   return (
     <div className="board">
       {BOARD.map((tile) => {
         const { col, row } = gridPos(tile.id);
         const ownerId = properties[tile.id];
-        const here = players.filter((p) => p.position === tile.id && !p.bankrupt);
         return (
           <div
             key={tile.id}
@@ -64,14 +57,11 @@ export function Board({
             <div className="tileName">{tile.name}</div>
             {tile.price ? <div className="tilePrice">${tile.price}</div> : null}
             {tile.tax ? <div className="tilePrice">${tile.tax}</div> : null}
-            <div className="tileTokens">
-              {here.map((p) => (
-                <span key={p.id} className="token" style={{ background: colorOf(p.id) }} title={p.name} />
-              ))}
-            </div>
           </div>
         );
       })}
+
+      <Tokens players={players} colorOf={colorOf} moveEvent={lastMove} />
 
       <div className="center">
         {phase === "game_over" ? (
@@ -81,7 +71,10 @@ export function Board({
             <p className="turn">
               {isMyTurn ? "Твой ход" : `Ходит: ${players.find((p) => p.id === currentPlayerId)?.name || "…"}`}
             </p>
-            {(dice1 > 0 || dice2 > 0) && <p className="dice">🎲 {dice1} + {dice2} = {dice1 + dice2}</p>}
+            <div className="diceRow">
+              <Dice value={dice1 || 1} rollTs={lastRoll?.ts ?? 0} />
+              <Dice value={dice2 || 1} rollTs={lastRoll?.ts ?? 0} />
+            </div>
             {isMyTurn && awaitingTile ? (
               <div className="buyBox">
                 <p>Купить «{awaitingTile.name}» за ${awaitingTile.price}?</p>
@@ -90,8 +83,8 @@ export function Board({
               </div>
             ) : isMyTurn ? (
               <div className="buyBox">
-                <button onClick={onRoll} disabled={dice1 > 0 || dice2 > 0}>🎲 Бросить кубики</button>
-                <button onClick={onEndTurn} disabled={!(dice1 > 0 || dice2 > 0)}>Закончить ход</button>
+                <button onClick={onRoll} disabled={rolled}>🎲 Бросить кубики</button>
+                <button onClick={onEndTurn} disabled={!rolled}>Закончить ход</button>
               </div>
             ) : null}
           </>
