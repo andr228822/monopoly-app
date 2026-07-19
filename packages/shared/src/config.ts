@@ -5,4 +5,6 @@ export const GAME_CONFIG = {
   maxPlayers: 6,
   countdownMs: 3000,
   startingMoney: 1500,
+  passGoBonus: 200,
+  utilityRentPerDice: 4, // Фаза 1: аренда коммунальных = сумма кубиков × это число
 } as const;

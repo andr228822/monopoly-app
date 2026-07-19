@@ -30,3 +30,49 @@ button:disabled { opacity: 0.5; cursor: default; }
 .err { color: #ff6b6b; }
 ul { list-style: none; padding: 0; }
 li { padding: 6px 0; border-bottom: 1px solid #2c6b2c; }
+
+.gameWrap { padding: 12px; }
+.leaveBtn { margin-bottom: 10px; }
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(11, minmax(70px, 1fr));
+  grid-template-rows: repeat(11, minmax(60px, auto));
+  gap: 2px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.tile {
+  background: #14401a;
+  border: 1px solid #2c6b2c;
+  border-radius: 4px;
+  padding: 4px;
+  font-size: 10px;
+  display: flex;
+  flex-direction: column;
+  min-height: 60px;
+  position: relative;
+}
+.tileGroup { height: 6px; border-radius: 2px; margin-bottom: 2px; }
+.tileName { flex: 1; line-height: 1.2; }
+.tilePrice { color: #c8f250; font-weight: 700; }
+.tileTokens { display: flex; gap: 2px; flex-wrap: wrap; }
+.token { width: 10px; height: 10px; border-radius: 50%; display: inline-block; border: 1px solid #fff; }
+
+.center {
+  grid-column: 2 / 11;
+  grid-row: 2 / 11;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: #0e2f12;
+  border-radius: 8px;
+}
+.turn { font-size: 20px; font-weight: 800; }
+.dice { font-size: 28px; }
+.winner { font-size: 24px; font-weight: 800; color: #c8f250; }
+.buyBox { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.players { min-width: 200px; }
+.players li { border: none; font-weight: 700; }

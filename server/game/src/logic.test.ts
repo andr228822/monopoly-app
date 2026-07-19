@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { canStart, pushRateWindow } from "./logic";
+import { canStart, pushRateWindow, computeMove, isPurchasable, rentFor, nextAlivePlayerId, resolveWinner } from "./logic";
+import { tileAt } from "@monopoly/shared";
 
 describe("canStart", () => {
   it("меньше минимума игроков — нельзя", () => {
@@ -31,5 +32,54 @@ describe("pushRateWindow", () => {
     const res = pushRateWindow([100, 200], now, 1000, 5);
     assert.equal(res.times.length, 1); // старые вычищены, добавлена новая
     assert.equal(res.limited, false);
+  });
+});
+
+describe("computeMove", () => {
+  it("обычное движение без прохода Старта", () => {
+    assert.deepEqual(computeMove(0, 3, 4), { to: 7, passedGo: false });
+  });
+  it("проход через Старт даёт бонус", () => {
+    assert.deepEqual(computeMove(38, 4, 3), { to: 5, passedGo: true });
+  });
+  it("попадание точно на Старт тоже считается проходом", () => {
+    assert.deepEqual(computeMove(35, 3, 2), { to: 0, passedGo: true });
+  });
+});
+
+describe("isPurchasable / rentFor", () => {
+  it("недвижимость/ж.д./коммунальные покупаемы, остальное нет", () => {
+    assert.equal(isPurchasable(tileAt(1)), true);   // property
+    assert.equal(isPurchasable(tileAt(5)), true);   // railroad
+    assert.equal(isPurchasable(tileAt(12)), true);  // utility
+    assert.equal(isPurchasable(tileAt(0)), false);  // go
+    assert.equal(isPurchasable(tileAt(4)), false);  // tax
+  });
+  it("аренда недвижимости — фикс. ставка клетки", () => {
+    assert.equal(rentFor(tileAt(1), 1, 1), tileAt(1).rent);
+  });
+  it("аренда коммунальной — по сумме кубиков", () => {
+    assert.equal(rentFor(tileAt(12), 3, 4), 7 * 4);
+  });
+});
+
+describe("nextAlivePlayerId", () => {
+  it("идёт по кругу, пропуская банкротов", () => {
+    const order = ["a", "b", "c", "d"];
+    assert.equal(nextAlivePlayerId(order, "a", new Set()), "b");
+    assert.equal(nextAlivePlayerId(order, "a", new Set(["b"])), "c");
+    assert.equal(nextAlivePlayerId(order, "d", new Set()), "a"); // круг замыкается
+  });
+});
+
+describe("resolveWinner", () => {
+  it("больше одного живого — игра продолжается (null)", () => {
+    assert.equal(resolveWinner([{ id: "a" }, { id: "b" }]), null);
+  });
+  it("остался один — он победитель", () => {
+    assert.equal(resolveWinner([{ id: "a" }, { id: "b", bankrupt: true }]), "a");
+  });
+  it("никого не осталось — пустая строка", () => {
+    assert.equal(resolveWinner([{ id: "a", bankrupt: true }]), "");
   });
 });

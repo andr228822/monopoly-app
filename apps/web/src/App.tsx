@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useGame } from "./net/useGame";
+import { Board } from "./Board";
 
 export function App() {
   const game = useGame();
@@ -8,6 +9,7 @@ export function App() {
   const inRoom = game.status === "connected" || game.status === "connecting";
   const me = game.snapshot.players.find((p) => p.id === game.mySessionId);
   const isHost = game.snapshot.hostId === game.mySessionId;
+  const inGame = game.snapshot.phase === "playing" || game.snapshot.phase === "game_over";
 
   if (!inRoom) {
     return (
@@ -24,6 +26,29 @@ export function App() {
           </button>
         </div>
         {game.error ? <p className="err">{game.error}</p> : null}
+      </div>
+    );
+  }
+
+  if (inGame) {
+    return (
+      <div className="gameWrap">
+        <button className="leaveBtn" onClick={game.leave}>Выйти</button>
+        <Board
+          players={game.snapshot.players}
+          properties={game.snapshot.properties}
+          currentPlayerId={game.snapshot.currentPlayerId}
+          mySessionId={game.mySessionId}
+          dice1={game.snapshot.dice1}
+          dice2={game.snapshot.dice2}
+          awaitingBuyTileId={game.snapshot.awaitingBuyTileId}
+          phase={game.snapshot.phase}
+          winnerId={game.snapshot.winnerId}
+          onRoll={game.rollDice}
+          onBuy={game.buyProperty}
+          onDecline={game.declineBuy}
+          onEndTurn={game.endTurn}
+        />
       </div>
     );
   }
@@ -49,7 +74,6 @@ export function App() {
         </>
       )}
       {game.snapshot.phase === "countdown" && <p>Старт через мгновение…</p>}
-      {game.snapshot.phase === "playing" && <p>🎲 Игра скоро тут будет (Фаза 1)</p>}
     </div>
   );
 }

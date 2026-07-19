@@ -1,6 +1,5 @@
 // Чистая игровая логика (без Colyseus/сети) — единая точка для юнит-тестов.
-// Фаза 0: только гейт старта лобби и анти-флуд. Правила Монополии — Фаза 1+.
-import { GAME_CONFIG } from "@monopoly/shared";
+import { GAME_CONFIG, TileType, tileAt, type Tile } from "@monopoly/shared";
 
 export interface PlayerLike {
   id: string;
@@ -28,3 +27,46 @@ export function pushRateWindow(
   arr.push(now);
   return { times: arr, limited: arr.length > max };
 }
+
+// ── Фаза 1: базовая игровая логика ──
+
+// Новая позиция после броска + прошёл ли игрок «Старт» (бонус 200).
+export function computeMove(position: number, d1: number, d2: number): { to: number; passedGo: boolean } {
+  const sum = position + d1 + d2;
+  return { to: sum % 40, passedGo: sum >= 40 };
+}
+
+// Может ли клетка быть куплена (недвижимость/ж.д./коммунальная).
+export function isPurchasable(tile: Tile): boolean {
+  return tile.type === TileType.Property || tile.type === TileType.Railroad || tile.type === TileType.Utility;
+}
+
+// Базовая аренда (без домов/монополии/владения всеми ж.д. — Фаза 3).
+// Коммунальные — по сумме кубиков текущего хода, остальное — фикс. ставка клетки.
+export function rentFor(tile: Tile, d1: number, d2: number): number {
+  if (tile.type === TileType.Utility) return (d1 + d2) * GAME_CONFIG.utilityRentPerDice;
+  return tile.rent ?? 0;
+}
+
+// Следующий живой (не банкрот) игрок по кругу от текущего в заданном порядке ходов.
+export function nextAlivePlayerId(
+  turnOrder: string[],
+  currentId: string,
+  bankruptIds: Set<string>
+): string {
+  const n = turnOrder.length;
+  const start = turnOrder.indexOf(currentId);
+  for (let i = 1; i <= n; i++) {
+    const id = turnOrder[(start + i) % n];
+    if (!bankruptIds.has(id)) return id;
+  }
+  return "";
+}
+
+// Победитель: если живых (не банкрот) участников <= 1 — вернуть его id ("" если никого).
+export function resolveWinner<T extends { id: string; bankrupt?: boolean }>(players: T[]): string | null {
+  const alive = players.filter((p) => !p.bankrupt);
+  return alive.length <= 1 ? (alive[0]?.id ?? "") : null;
+}
+
+export { tileAt };

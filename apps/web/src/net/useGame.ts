@@ -9,6 +9,9 @@ export interface PlayerView {
   avatar: string;
   ready: boolean;
   connected: boolean;
+  money: number;
+  position: number;
+  bankrupt: boolean;
 }
 
 export interface GameSnapshot {
@@ -18,12 +21,19 @@ export interface GameSnapshot {
   maxPlayers: number;
   hostId: string;
   players: PlayerView[];
+  currentPlayerId: string;
+  dice1: number;
+  dice2: number;
+  awaitingBuyTileId: number;
+  properties: Record<number, string>; // tileId -> ownerId
+  winnerId: string;
 }
 
 export type Status = "idle" | "connecting" | "connected" | "error";
 
 const EMPTY: GameSnapshot = {
   phase: Phase.Lobby, lobbyName: "", code: "", maxPlayers: 6, hostId: "", players: [],
+  currentPlayerId: "", dice1: 0, dice2: 0, awaitingBuyTileId: 255, properties: {}, winnerId: "",
 };
 
 // Хук подключения к игровому серверу. Зеркалит состояние комнаты в React.
@@ -44,7 +54,14 @@ export function useGame() {
     const state: any = room.state;
     const players: PlayerView[] = [];
     state.players?.forEach((p: any) => {
-      players.push({ id: p.id, name: p.name, avatar: p.avatar ?? "", ready: p.ready, connected: p.connected ?? true });
+      players.push({
+        id: p.id, name: p.name, avatar: p.avatar ?? "", ready: p.ready, connected: p.connected ?? true,
+        money: p.money ?? 0, position: p.position ?? 0, bankrupt: p.bankrupt ?? false,
+      });
+    });
+    const properties: Record<number, string> = {};
+    state.properties?.forEach((prop: any, tileId: string) => {
+      if (prop.ownerId) properties[Number(tileId)] = prop.ownerId;
     });
     setSnapshot({
       phase: state.phase,
@@ -53,6 +70,12 @@ export function useGame() {
       maxPlayers: state.maxPlayers,
       hostId: state.hostId,
       players,
+      currentPlayerId: state.currentPlayerId ?? "",
+      dice1: state.dice1 ?? 0,
+      dice2: state.dice2 ?? 0,
+      awaitingBuyTileId: state.awaitingBuyTileId ?? 255,
+      properties,
+      winnerId: state.winnerId ?? "",
     });
   }, []);
 
@@ -99,6 +122,19 @@ export function useGame() {
     roomRef.current?.send(ClientMsg.StartGame);
   }, []);
 
+  const rollDice = useCallback(() => {
+    roomRef.current?.send(ClientMsg.RollDice);
+  }, []);
+  const buyProperty = useCallback(() => {
+    roomRef.current?.send(ClientMsg.BuyProperty);
+  }, []);
+  const declineBuy = useCallback(() => {
+    roomRef.current?.send(ClientMsg.DeclineBuy);
+  }, []);
+  const endTurn = useCallback(() => {
+    roomRef.current?.send(ClientMsg.EndTurn);
+  }, []);
+
   const leave = useCallback(() => {
     try { roomRef.current?.leave(); } catch {}
     roomRef.current = null;
@@ -108,5 +144,10 @@ export function useGame() {
 
   useEffect(() => () => { try { roomRef.current?.leave(); } catch {} }, []);
 
-  return { status, error, snapshot, mySessionId, createGame, joinByCode, setReady, startGame, leave };
+  return {
+    status, error, snapshot, mySessionId,
+    createGame, joinByCode, setReady, startGame,
+    rollDice, buyProperty, declineBuy, endTurn,
+    leave,
+  };
 }
