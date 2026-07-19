@@ -1,0 +1,25 @@
+{
+  "name": "monopoly",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Онлайн-Монополия — классические правила, 2-6 игроков",
+  "workspaces": [
+    "packages/*",
+    "server/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "server": "npm run dev --workspace=@monopoly/game-server",
+    "app": "npm run dev --workspace=@monopoly/web",
+    "build:web": "npm run build --workspace=@monopoly/web",
+    "build": "npm run build:web",
+    "deploy": "node scripts/deploy.mjs",
+    "start": "npm run start --workspace=@monopoly/game-server",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "esbuild@0.21.5": true,
+    "msgpackr-extract@3.0.4": true
+  }
+}

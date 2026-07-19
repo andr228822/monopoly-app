@@ -1,0 +1,9 @@
+node_modules/
+dist/
+build/
+server/game/public/
+*.log
+.env
+.env.*
+.DS_Store
+.monopoly-deploy.tgz
