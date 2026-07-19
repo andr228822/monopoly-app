@@ -151,17 +151,21 @@ export class GameRoom extends Room<GameState> {
 
   private beginRound() {
     this.turnOrder = [...this.state.players.keys()];
+    console.log(`[DEBUG] beginRound turnOrder=`, this.turnOrder, "players.size=", this.state.players.size);
     this.state.properties.clear();
     for (const p of this.state.players.values()) {
+      console.log(`[DEBUG] resetting player id=${p.id} moneyBefore=${p.money} GAME_CONFIG.startingMoney=${GAME_CONFIG.startingMoney}`);
       p.money = GAME_CONFIG.startingMoney;
       p.position = 0;
       p.bankrupt = false;
+      console.log(`[DEBUG] moneyAfter=${p.money}`);
     }
     this.state.winnerId = "";
     this.state.dice1 = 0;
     this.state.dice2 = 0;
     this.state.awaitingBuyTileId = 255;
     this.state.currentPlayerId = this.turnOrder[0] || "";
+    console.log(`[DEBUG] currentPlayerId set to`, this.state.currentPlayerId);
     this.setPhase(Phase.Playing);
   }
 
