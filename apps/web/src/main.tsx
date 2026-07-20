@@ -1,10 +1,7 @@
-import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import "./index.css";
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+// Без React.StrictMode: его двойной вызов эффектов в dev ломает анимацию на
+// таймерах/rAF (и не отражает поведение прод-сборки, где StrictMode — no-op).
+ReactDOM.createRoot(document.getElementById("root")!).render(<App />);

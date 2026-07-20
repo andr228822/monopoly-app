@@ -2,8 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import type { PlayerView, MoveEvent } from "./net/useGame";
 import { gridPos } from "./boardLayout";
 
-const STEP_MS = 220; // время одного шага фишки на соседнюю клетку
+const STEP_MS = 180; // время одного шага фишки на соседнюю клетку
 
+// Пошаговая анимация фишек. Показываемая позиция каждого игрока (state `pos`)
+// двигается по одной клетке к цели через setInterval. У каждого игрока не больше
+// одной активной анимации — новый ход отменяет предыдущую (важно для дубля, где
+// второй бросок приходит до конца первой анимации). Позиции берутся с сервера
+// (from/to одинаковы всем) → картинка синхронна у всех игроков.
 export function Tokens({
   players, colorOf, moveEvent, startDelayMs = 0,
 }: {
@@ -12,16 +17,22 @@ export function Tokens({
   moveEvent: MoveEvent | null;
   startDelayMs?: number; // подождать конца анимации кубиков, прежде чем двигать фишку
 }) {
-  // Отображаемая позиция каждого игрока — двигается пошагово, независимо от
-  // «настоящей» p.position (та меняется мгновенно вместе с состоянием сервера).
-  const [displayed, setDisplayed] = useState<Record<string, number>>({});
-  const startTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const stepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastKeyRef = useRef("");
+  const [pos, setPos] = useState<Record<string, number>>({});
+  // Активные таймеры по игроку — чтобы отменить недоигранную анимацию при новом ходе.
+  const timers = useRef<Record<string, { start?: any; walk?: any }>>({});
+
+  const clearFor = (id: string) => {
+    const t = timers.current[id];
+    if (t) {
+      if (t.start) clearTimeout(t.start);
+      if (t.walk) clearInterval(t.walk);
+      delete timers.current[id];
+    }
+  };
 
   // Новый игрок — сразу ставим на его текущую клетку (без анимации «от нуля»).
   useEffect(() => {
-    setDisplayed((prev) => {
+    setPos((prev) => {
       let changed = false;
       const next = { ...prev };
       for (const p of players) {
@@ -33,53 +44,37 @@ export function Tokens({
 
   useEffect(() => {
     if (!moveEvent) return;
-    // Дедуп по СОДЕРЖИМОМУ хода (а не по метке времени сообщения) — устойчиво
-    // даже если событие почему-то доставлено клиенту дважды.
-    const key = `${moveEvent.playerId}:${moveEvent.from}:${moveEvent.to}:${moveEvent.direct ? 1 : 0}`;
-    if (key === lastKeyRef.current) return;
-    lastKeyRef.current = key;
+    const mv = moveEvent;
+    clearFor(mv.playerId); // отменяем прошлую анимацию этого игрока, если ещё идёт
 
-    // Отменяем недоигранную анимацию предыдущего хода (например, второй бросок
-    // при дубле мог начаться раньше, чем дошла анимация первого) и СРАЗУ ставим
-    // фишку на стартовую клетку нового хода — без этого получался рывок/прыжок
-    // с того места, где прервалась старая анимация, к началу новой.
-    if (startTimerRef.current) clearTimeout(startTimerRef.current);
-    if (stepTimerRef.current) clearTimeout(stepTimerRef.current);
-    setDisplayed((prev) => ({ ...prev, [moveEvent.playerId]: moveEvent.from }));
-
-    startTimerRef.current = setTimeout(() => {
-      // Телепорт (например, отправка в тюрьму за 3 дубля) — без пошагового обхода клеток.
-      if (moveEvent.direct) {
-        setDisplayed((prev) => ({ ...prev, [moveEvent.playerId]: moveEvent.to }));
+    const start = setTimeout(() => {
+      if (mv.direct) {
+        // Телепорт (тюрьма за 3 дубля) — без обхода клеток.
+        setPos((p) => ({ ...p, [mv.playerId]: mv.to }));
+        delete timers.current[mv.playerId];
         return;
       }
-      const path: number[] = [];
-      let cur = moveEvent.from;
-      while (cur !== moveEvent.to) {
-        cur = (cur + 1) % 40;
-        path.push(cur);
-      }
-      if (path.length === 0) return;
-      let i = 0;
-      const step = () => {
-        setDisplayed((prev) => ({ ...prev, [moveEvent.playerId]: path[i] }));
-        i++;
-        if (i < path.length) stepTimerRef.current = setTimeout(step, STEP_MS);
-      };
-      step();
+      setPos((p) => ({ ...p, [mv.playerId]: mv.from })); // фишка стартует с начальной клетки хода
+      let cur = mv.from;
+      const walk = setInterval(() => {
+        cur = (cur + 1) % 40; // ходы всегда вперёд → шагаем по кругу
+        setPos((p) => ({ ...p, [mv.playerId]: cur }));
+        if (cur === mv.to) { clearInterval(walk); delete timers.current[mv.playerId]; }
+      }, STEP_MS);
+      timers.current[mv.playerId] = { walk };
     }, startDelayMs);
+    timers.current[mv.playerId] = { start };
   }, [moveEvent, startDelayMs]);
 
-  // Таймеры чистим только при реальном размонтировании компонента.
+  // Чистим все таймеры при размонтировании.
   useEffect(() => () => {
-    if (startTimerRef.current) clearTimeout(startTimerRef.current);
-    if (stepTimerRef.current) clearTimeout(stepTimerRef.current);
+    for (const id in timers.current) clearFor(id);
   }, []);
 
   return (
     <>
       {players.filter((p) => !p.bankrupt).map((p, i) => {
-        const tile = displayed[p.id] ?? p.position;
+        const tile = pos[p.id] ?? p.position;
         const { col, row } = gridPos(tile);
         const leftPct = ((col - 1 + 0.5) / 11) * 100;
         const topPct = ((row - 1 + 0.5) / 11) * 100;
