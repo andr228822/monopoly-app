@@ -53,6 +53,7 @@ export function useGame() {
   const [lastTurnStart, setLastTurnStart] = useState<TurnStartEvent | null>(null);
   const roomRef = useRef<Room | null>(null);
   const clientRef = useRef<Client | null>(null);
+  const attachedRoomId = useRef<string | null>(null);
 
   const getClient = useCallback(() => {
     if (!clientRef.current) clientRef.current = new Client(SERVER_ENDPOINT);
@@ -89,6 +90,10 @@ export function useGame() {
   }, []);
 
   const attach = useCallback((room: Room) => {
+    // Защита от повторной регистрации обработчиков на ту же комнату (иначе каждое
+    // сообщение сервера обрабатывается дважды — например, фишка дважды проходит путь).
+    if (attachedRoomId.current === room.roomId) return;
+    attachedRoomId.current = room.roomId;
     roomRef.current = room;
     setMySessionId(room.sessionId);
     room.onStateChange(() => syncFromRoom(room));
