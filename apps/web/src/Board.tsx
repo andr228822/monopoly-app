@@ -4,6 +4,7 @@ import type { PlayerView, MoveEvent, RollEvent, TurnStartEvent } from "./net/use
 import { gridPos } from "./boardLayout";
 import { Tokens } from "./Tokens";
 import { Dice, DICE_ANIMATION_MS } from "./Dice";
+import { mulberry32, hashStr } from "./seededRandom";
 
 const PLAYER_COLORS = ["#e63946", "#457b9d", "#f4a261", "#2a9d8f", "#e9c46a", "#9d4edd"];
 
@@ -12,22 +13,24 @@ const GROUP_COLORS: Record<string, string> = {
   red: "#e63946", yellow: "#f9d342", green: "#2a9d8f", darkblue: "#1d3557",
 };
 
-const rand = (a: number, b: number) => a + Math.random() * (b - a);
+const randWith = (rng: () => number, a: number, b: number) => a + rng() * (b - a);
 // 4 угла доски (внутри кольца клеток) — кубики каждый бросок приземляются в
 // двух РАЗНЫХ углах, чтобы не падать рядом друг с другом.
 const DICE_QUADRANTS = [
-  () => ({ left: rand(14, 33), top: rand(14, 33) }),
-  () => ({ left: rand(67, 86), top: rand(14, 33) }),
-  () => ({ left: rand(14, 33), top: rand(67, 86) }),
-  () => ({ left: rand(67, 86), top: rand(67, 86) }),
+  (rng: () => number) => ({ left: randWith(rng, 14, 33), top: randWith(rng, 14, 33) }),
+  (rng: () => number) => ({ left: randWith(rng, 67, 86), top: randWith(rng, 14, 33) }),
+  (rng: () => number) => ({ left: randWith(rng, 14, 33), top: randWith(rng, 67, 86) }),
+  (rng: () => number) => ({ left: randWith(rng, 67, 86), top: randWith(rng, 67, 86) }),
 ];
-function pickTwoQuadrants(): [{ left: number; top: number }, { left: number; top: number }] {
+// rng — детерминированный (сид из данных броска), поэтому у всех игроков на
+// экране получаются ОДИНАКОВЫЕ углы, а не каждый считает свои Math.random().
+function pickTwoQuadrants(rng: () => number): [{ left: number; top: number }, { left: number; top: number }] {
   const order = [0, 1, 2, 3];
   for (let i = order.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(rng() * (i + 1));
     [order[i], order[j]] = [order[j], order[i]];
   }
-  return [DICE_QUADRANTS[order[0]](), DICE_QUADRANTS[order[1]]()];
+  return [DICE_QUADRANTS[order[0]](rng), DICE_QUADRANTS[order[1]](rng)];
 }
 
 export function Board({
@@ -67,13 +70,19 @@ export function Board({
     ? Math.max(0, Math.ceil((lastTurnStart.deadline - now) / 1000))
     : null;
 
-  // Новый бросок — разбрасываем кубики по двум разным углам доски.
-  const [dicePos, setDicePos] = useState(() => pickTwoQuadrants());
-  const lastPosTs = useRef(0);
+  // Новый бросок — разбрасываем кубики по двум разным углам доски. Сид берём
+  // из данных самого броска (playerId+d1+d2 — приходят всем одинаково с
+  // сервера), а НЕ из локального Math.random() — иначе у каждого игрока
+  // кубики оказывались бы в разных местах экрана.
+  const [dicePos, setDicePos] = useState(() => pickTwoQuadrants(mulberry32(1)));
+  const lastPosKey = useRef("");
   useEffect(() => {
-    if (!lastRoll || lastRoll.ts === lastPosTs.current) return;
-    lastPosTs.current = lastRoll.ts;
-    setDicePos(pickTwoQuadrants());
+    if (!lastRoll) return;
+    const key = `${lastRoll.playerId}:${lastRoll.d1}:${lastRoll.d2}:${lastRoll.ts}`;
+    if (key === lastPosKey.current) return;
+    lastPosKey.current = key;
+    const seed = hashStr(lastRoll.playerId) ^ (lastRoll.d1 * 7919 + lastRoll.d2 * 104729);
+    setDicePos(pickTwoQuadrants(mulberry32(seed)));
   }, [lastRoll]);
 
   return (
@@ -106,8 +115,16 @@ export function Board({
           Значение берём из самого события броска (lastRoll), НЕ из dice1/dice2: синк
           состояния и это сообщение идут отдельными пакетами и могут прийти в любом
           порядке — стейт иногда ещё старый в момент броска. */}
-      <Dice value={lastRoll?.d1 ?? 1} rollTs={lastRoll?.ts ?? 0} leftPct={dicePos[0].left} topPct={dicePos[0].top} />
-      <Dice value={lastRoll?.d2 ?? 1} rollTs={lastRoll?.ts ?? 0} leftPct={dicePos[1].left} topPct={dicePos[1].top} />
+      <Dice
+        value={lastRoll?.d1 ?? 1} rollTs={lastRoll?.ts ?? 0}
+        leftPct={dicePos[0].left} topPct={dicePos[0].top}
+        seed={lastRoll ? (hashStr(lastRoll.playerId) ^ (lastRoll.d1 * 7919 + lastRoll.d2 * 104729 + 1)) : 1}
+      />
+      <Dice
+        value={lastRoll?.d2 ?? 1} rollTs={lastRoll?.ts ?? 0}
+        leftPct={dicePos[1].left} topPct={dicePos[1].top}
+        seed={lastRoll ? (hashStr(lastRoll.playerId) ^ (lastRoll.d1 * 7919 + lastRoll.d2 * 104729 + 2)) : 2}
+      />
 
       <div className="center">
         {phase === "game_over" ? (

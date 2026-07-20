@@ -15,8 +15,9 @@ export function Tokens({
   // Отображаемая позиция каждого игрока — двигается пошагово, независимо от
   // «настоящей» p.position (та меняется мгновенно вместе с состоянием сервера).
   const [displayed, setDisplayed] = useState<Record<string, number>>({});
+  const startTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const seenMoveTs = useRef(0);
+  const lastKeyRef = useRef("");
 
   // Новый игрок — сразу ставим на его текущую клетку (без анимации «от нуля»).
   useEffect(() => {
@@ -31,10 +32,22 @@ export function Tokens({
   }, [players]);
 
   useEffect(() => {
-    if (!moveEvent || moveEvent.ts === seenMoveTs.current) return;
-    seenMoveTs.current = moveEvent.ts;
+    if (!moveEvent) return;
+    // Дедуп по СОДЕРЖИМОМУ хода (а не по метке времени сообщения) — устойчиво
+    // даже если событие почему-то доставлено клиенту дважды.
+    const key = `${moveEvent.playerId}:${moveEvent.from}:${moveEvent.to}:${moveEvent.direct ? 1 : 0}`;
+    if (key === lastKeyRef.current) return;
+    lastKeyRef.current = key;
 
-    const startTimer = setTimeout(() => {
+    // Отменяем недоигранную анимацию предыдущего хода (например, второй бросок
+    // при дубле мог начаться раньше, чем дошла анимация первого) и СРАЗУ ставим
+    // фишку на стартовую клетку нового хода — без этого получался рывок/прыжок
+    // с того места, где прервалась старая анимация, к началу новой.
+    if (startTimerRef.current) clearTimeout(startTimerRef.current);
+    if (stepTimerRef.current) clearTimeout(stepTimerRef.current);
+    setDisplayed((prev) => ({ ...prev, [moveEvent.playerId]: moveEvent.from }));
+
+    startTimerRef.current = setTimeout(() => {
       // Телепорт (например, отправка в тюрьму за 3 дубля) — без пошагового обхода клеток.
       if (moveEvent.direct) {
         setDisplayed((prev) => ({ ...prev, [moveEvent.playerId]: moveEvent.to }));
@@ -55,12 +68,13 @@ export function Tokens({
       };
       step();
     }, startDelayMs);
-
-    return () => {
-      clearTimeout(startTimer);
-      if (stepTimerRef.current) clearTimeout(stepTimerRef.current);
-    };
   }, [moveEvent, startDelayMs]);
+
+  // Таймеры чистим только при реальном размонтировании компонента.
+  useEffect(() => () => {
+    if (startTimerRef.current) clearTimeout(startTimerRef.current);
+    if (stepTimerRef.current) clearTimeout(stepTimerRef.current);
+  }, []);
 
   return (
     <>

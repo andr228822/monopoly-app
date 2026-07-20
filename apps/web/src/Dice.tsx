@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { mulberry32 } from "./seededRandom";
 
 // Псевдо-3D кубик на CSS-трансформах: настоящий куб из 6 граней (transform-style:
 // preserve-3d). При новом броске (rollTs меняется) — «прилетает» снизу через доску
@@ -43,12 +44,13 @@ function nextAngle(prevTotal: number, target: number): number {
 }
 
 export function Dice({
-  value, rollTs, leftPct, topPct,
+  value, rollTs, leftPct, topPct, seed,
 }: {
   value: number;
   rollTs: number;
   leftPct: number; // где кубик приземляется на доске (% от ширины/высоты)
   topPct: number;
+  seed: number; // из данных броска — чтобы разлёт был одинаковым у всех экранов
 }) {
   const [rot, setRot] = useState({ x: 0, y: 0 });
   const lastTs = useRef(0);
@@ -64,17 +66,19 @@ export function Dice({
     setRot((prev) => ({ x: nextAngle(prev.x, target.x), y: nextAngle(prev.y, target.y) }));
 
     // Разлёт «броска» — летит снизу доски (положительный Y) с боковым разбросом.
+    // Детерминированный (сид из данных броска) — одинаковый у всех экранов.
+    const rng = mulberry32(seed);
     const el = fallRef.current;
     if (el) {
-      el.style.setProperty("--fx", `${(Math.random() * 2 - 1) * 90}px`);
-      el.style.setProperty("--fy", `${140 + Math.random() * 100}px`);
-      el.style.setProperty("--frot", `${(Math.random() * 2 - 1) * 90}deg`);
+      el.style.setProperty("--fx", `${(rng() * 2 - 1) * 90}px`);
+      el.style.setProperty("--fy", `${140 + rng() * 100}px`);
+      el.style.setProperty("--frot", `${(rng() * 2 - 1) * 90}deg`);
       // Перезапуск CSS keyframe-анимации без ремаунта (иначе куб потерял бы transition).
       el.style.animation = "none";
       void el.offsetWidth;
       el.style.animation = "";
     }
-  }, [rollTs, value]);
+  }, [rollTs, value, seed]);
 
   return (
     <div className="diceAnchor" style={{ left: `${leftPct}%`, top: `${topPct}%` }}>
