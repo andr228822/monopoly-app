@@ -1,9 +1,12 @@
 import { Room, Client } from "colyseus";
 import { GameState, Player, PropertyState } from "../schema/GameState";
-import { GAME_CONFIG, Phase, ClientMsg, ServerMsg, TileType } from "@monopoly/shared";
+import {
+  GAME_CONFIG, Phase, ClientMsg, ServerMsg, TileType,
+  CardEffect, drawCard, type Card,
+} from "@monopoly/shared";
 import {
   canStart, pushRateWindow, computeMove, isPurchasable, rentFor, isDouble,
-  nextAlivePlayerId, resolveWinner, tileAt,
+  jailRollOutcome, moveToTile, nextAlivePlayerId, resolveWinner, tileAt,
 } from "../logic";
 
 interface CreateOptions {
@@ -66,6 +69,16 @@ export class GameRoom extends Room<GameState> {
     this.onMessage(ClientMsg.DeclineBuy, (client) => {
       if (this.rateLimited(client)) return;
       this.handleDeclineBuy(client);
+    });
+
+    this.onMessage(ClientMsg.PayJailFine, (client) => {
+      if (this.rateLimited(client)) return;
+      this.handlePayJailFine(client);
+    });
+
+    this.onMessage(ClientMsg.UseJailCard, (client) => {
+      if (this.rateLimited(client)) return;
+      this.handleUseJailCard(client);
     });
   }
 
@@ -154,6 +167,9 @@ export class GameRoom extends Room<GameState> {
       p.money = GAME_CONFIG.startingMoney;
       p.position = 0;
       p.bankrupt = false;
+      p.inJail = false;
+      p.jailTurns = 0;
+      p.getOutCards = 0;
     }
     this.state.winnerId = "";
     this.state.dice1 = 0;
@@ -202,14 +218,16 @@ export class GameRoom extends Room<GameState> {
     this.state.dice1 = d1;
     this.state.dice2 = d2;
     const double = isDouble(d1, d2);
-    if (double) this.turnDoubles++;
     this.broadcast(ServerMsg.DiceRolled, { playerId: p.id, d1, d2, isDouble: double });
 
+    // ── Бросок в тюрьме — отдельная логика (дубль/штраф/попытки) ──
+    if (p.inJail) { this.resolveJailRoll(p, d1, d2, double); return; }
+
+    if (double) this.turnDoubles++;
     // 3 дубля подряд — сразу в тюрьму, без учёта клетки, куда указывали кубики.
     if (double && this.turnDoubles >= 3) {
-      const from = p.position;
-      p.position = GAME_CONFIG.jailTileId;
-      this.broadcast(ServerMsg.PlayerMoved, { playerId: p.id, from, to: GAME_CONFIG.jailTileId, passedGo: false, direct: true });
+      this.sendToJail(p);
+      this.pendingResolution = null;
       this.scheduleResolution("advance", p.id);
       return;
     }
@@ -217,12 +235,50 @@ export class GameRoom extends Room<GameState> {
     this.pendingResolution = double ? "reroll" : "advance";
     const from = p.position;
     const { to, passedGo } = computeMove(p.position, d1, d2);
-    p.position = to;
-    if (passedGo) p.money += GAME_CONFIG.passGoBonus;
-    this.broadcast(ServerMsg.PlayerMoved, { playerId: p.id, from, to, passedGo });
+    this.movePlayer(p, from, to, passedGo);
 
     this.resolveTile(p, d1, d2);
-    if (this.state.awaitingBuyTileId === 255) this.afterResolve(p);
+    if (this.state.awaitingBuyTileId === 255 && this.state.currentPlayerId === p.id) this.afterResolve(p);
+  }
+
+  // Бросок кубиков, когда игрок в тюрьме: дубль → выход и ход этим броском;
+  // иначе попытка засчитана — либо остаёмся, либо (исчерпав попытки) выходим со штрафом.
+  private resolveJailRoll(p: Player, d1: number, d2: number, double: boolean) {
+    p.jailTurns++;
+    const outcome = jailRollOutcome(double, p.jailTurns);
+    if (outcome === "stay") {
+      this.pendingResolution = null;
+      this.scheduleResolution("advance", p.id); // ход переходит дальше
+      return;
+    }
+    if (outcome === "forced_pay") {
+      this.chargeMoney(p, GAME_CONFIG.jailFine);
+      if (p.bankrupt) return; // банкротство обработано (ход уже передан)
+    }
+    // escape или forced_pay → выходим и ходим на выпавший бросок (без доп. хода за дубль).
+    p.inJail = false;
+    p.jailTurns = 0;
+    this.pendingResolution = "advance";
+    const from = p.position;
+    const { to, passedGo } = computeMove(p.position, d1, d2);
+    this.movePlayer(p, from, to, passedGo);
+    this.resolveTile(p, d1, d2);
+    if (this.state.awaitingBuyTileId === 255 && this.state.currentPlayerId === p.id) this.afterResolve(p);
+  }
+
+  // Перемещение фишки: обновляет позицию, бонус за проход Старта, шлёт анимацию.
+  private movePlayer(p: Player, from: number, to: number, passedGo: boolean, direct = false) {
+    p.position = to;
+    if (passedGo) p.money += GAME_CONFIG.passGoBonus;
+    this.broadcast(ServerMsg.PlayerMoved, { playerId: p.id, from, to, passedGo, direct });
+  }
+
+  // Отправка в тюрьму: телепорт на клетку тюрьмы, без бонуса за Старт.
+  private sendToJail(p: Player) {
+    const from = p.position;
+    p.inJail = true;
+    p.jailTurns = 0;
+    this.movePlayer(p, from, GAME_CONFIG.jailTileId, false, true);
   }
 
   private resolveTile(p: Player, d1: number, d2: number) {
@@ -238,8 +294,64 @@ export class GameRoom extends Room<GameState> {
       }
     } else if (tile.type === TileType.Tax) {
       this.chargeMoney(p, tile.tax || 0);
+    } else if (tile.type === TileType.GoToJail) {
+      this.sendToJail(p);
+      this.pendingResolution = "advance"; // попал в тюрьму — ход окончен, доп. хода нет
+    } else if (tile.type === TileType.Chance) {
+      this.drawAndApply(p, "chance", d1, d2);
+    } else if (tile.type === TileType.Chest) {
+      this.drawAndApply(p, "chest", d1, d2);
     }
-    // go/chance/chest/jail/free_parking/go_to_jail — пока без эффекта (Фаза 2+).
+    // go/jail(просто в гостях)/free_parking — без эффекта.
+  }
+
+  // Тянем карту, показываем всем, применяем эффект.
+  private drawAndApply(p: Player, deck: "chance" | "chest", d1: number, d2: number) {
+    const card = drawCard(deck);
+    this.broadcast(ServerMsg.CardDrawn, { playerId: p.id, deck, text: card.text });
+    this.applyCard(p, card, d1, d2);
+  }
+
+  private applyCard(p: Player, card: Card, d1: number, d2: number) {
+    switch (card.effect) {
+      case CardEffect.Money:
+        this.changeMoney(p, card.amount || 0);
+        break;
+      case CardEffect.GetOutFree:
+        p.getOutCards++;
+        break;
+      case CardEffect.GoToJail:
+        this.sendToJail(p);
+        this.pendingResolution = "advance";
+        break;
+      case CardEffect.MoveTo: {
+        const { to, passedGo } = moveToTile(p.position, card.tile ?? p.position);
+        this.movePlayer(p, p.position, to, passedGo);
+        this.resolveTile(p, d1, d2); // новая клетка тоже отрабатывает (аренда/покупка/…)
+        break;
+      }
+      case CardEffect.CollectFromEach: {
+        const amount = card.amount || 0;
+        for (const o of this.state.players.values()) {
+          if (o.id === p.id || o.bankrupt) continue;
+          o.money -= amount;
+          p.money += amount;
+          if (o.money < 0) this.bankruptPlayer(o);
+          if (this.state.phase !== Phase.Playing) return;
+        }
+        break;
+      }
+      case CardEffect.PayEach: {
+        const amount = card.amount || 0;
+        for (const o of this.state.players.values()) {
+          if (o.id === p.id || o.bankrupt) continue;
+          o.money += amount;
+          p.money -= amount;
+        }
+        if (p.money < 0) this.bankruptPlayer(p);
+        break;
+      }
+    }
   }
 
   private payRent(payer: Player, owner: Player, amount: number, tileId: number) {
@@ -249,9 +361,15 @@ export class GameRoom extends Room<GameState> {
     if (payer.money < 0) this.bankruptPlayer(payer);
   }
 
-  // Налог уходит в банк — просто теряются деньги, никому не зачисляются.
+  // Налог/штраф уходит в банк — просто теряются деньги, никому не зачисляются.
   private chargeMoney(p: Player, amount: number) {
     p.money -= amount;
+    if (p.money < 0) this.bankruptPlayer(p);
+  }
+
+  // Изменение денег со знаком (карты): + начисление, − списание (может обанкротить).
+  private changeMoney(p: Player, delta: number) {
+    p.money += delta;
     if (p.money < 0) this.bankruptPlayer(p);
   }
 
@@ -299,6 +417,30 @@ export class GameRoom extends Room<GameState> {
     if (!p) return;
     this.state.awaitingBuyTileId = 255;
     this.afterResolve(p);
+  }
+
+  // В тюрьме до броска: заплатить штраф — выйти. Дальше игрок ещё бросает и ходит.
+  private handlePayJailFine(client: Client) {
+    if (this.state.phase !== Phase.Playing) return;
+    if (client.sessionId !== this.state.currentPlayerId) return;
+    const p = this.state.players.get(client.sessionId);
+    if (!p || !p.inJail || p.money < GAME_CONFIG.jailFine) return;
+    if (this.state.dice1 || this.state.dice2) return; // уже бросил в этот ход
+    this.chargeMoney(p, GAME_CONFIG.jailFine);
+    p.inJail = false;
+    p.jailTurns = 0;
+  }
+
+  // В тюрьме до броска: использовать карту «выход бесплатно». Дальше бросок и ход.
+  private handleUseJailCard(client: Client) {
+    if (this.state.phase !== Phase.Playing) return;
+    if (client.sessionId !== this.state.currentPlayerId) return;
+    const p = this.state.players.get(client.sessionId);
+    if (!p || !p.inJail || p.getOutCards < 1) return;
+    if (this.state.dice1 || this.state.dice2) return; // уже бросил в этот ход
+    p.getOutCards--;
+    p.inJail = false;
+    p.jailTurns = 0;
   }
 
   // Клетка разрешена (и решение о покупке, если было, принято) — либо ещё один

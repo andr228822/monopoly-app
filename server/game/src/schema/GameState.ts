@@ -11,9 +11,12 @@ export class Player extends Schema {
   @type("int32") money = GAME_CONFIG.startingMoney;
   @type("uint8") position = 0;
   @type("boolean") bankrupt = false;
+  @type("boolean") inJail = false;
+  @type("uint8") getOutCards = 0; // карт «выход из тюрьмы бесплатно» в запасе
 
-  // серверное (не синкается): порядок хода назначается один раз при старте
+  // серверное (не синкается): порядок хода + счётчик неудачных попыток дубля в тюрьме
   turnIndex = 0;
+  jailTurns = 0;
 }
 
 // Владение клеткой недвижимости/ж.д./коммунальной. Ключ карты — id клетки (строкой).

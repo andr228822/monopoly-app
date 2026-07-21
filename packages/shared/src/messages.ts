@@ -16,6 +16,8 @@ export const ClientMsg = {
   RollDice: "roll_dice",
   BuyProperty: "buy_property",
   DeclineBuy: "decline_buy",
+  PayJailFine: "pay_jail_fine",   // выйти из тюрьмы за штраф (потом бросить и ходить)
+  UseJailCard: "use_jail_card",   // выйти из тюрьмы картой «выход бесплатно»
 } as const;
 
 export const ServerMsg = {
@@ -26,6 +28,7 @@ export const ServerMsg = {
   PlayerBankrupt: "player_bankrupt",
   GameOver: "game_over",
   TurnStarted: "turn_started",
+  CardDrawn: "card_drawn",        // игрок вытянул карту Шанс/Казна
 } as const;
 
 export interface DiceRolledPayload { playerId: string; d1: number; d2: number; isDouble: boolean }
@@ -36,3 +39,4 @@ export interface RentPaidPayload { fromId: string; toId: string; amount: number;
 export interface PlayerBankruptPayload { playerId: string }
 export interface GameOverPayload { winnerId: string }
 export interface TurnStartedPayload { playerId: string; deadline: number }
+export interface CardDrawnPayload { playerId: string; deck: "chance" | "chest"; text: string }

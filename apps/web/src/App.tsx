@@ -47,9 +47,12 @@ export function App() {
           lastRoll={game.lastRoll}
           lastMove={game.lastMove}
           lastTurnStart={game.lastTurnStart}
+          lastCard={game.lastCard}
           onRoll={game.rollDice}
           onBuy={game.buyProperty}
           onDecline={game.declineBuy}
+          onPayJailFine={game.payJailFine}
+          onUseJailCard={game.useJailCard}
         />
       </div>
     );

@@ -12,6 +12,8 @@ export interface PlayerView {
   money: number;
   position: number;
   bankrupt: boolean;
+  inJail: boolean;
+  getOutCards: number;
 }
 
 export interface GameSnapshot {
@@ -36,6 +38,7 @@ export type Status = "idle" | "connecting" | "connected" | "error";
 export interface RollEvent { playerId: string; d1: number; d2: number; isDouble: boolean; ts: number }
 export interface MoveEvent { playerId: string; from: number; to: number; passedGo: boolean; direct?: boolean; ts: number }
 export interface TurnStartEvent { playerId: string; deadline: number; ts: number }
+export interface CardEvent { playerId: string; deck: "chance" | "chest"; text: string; ts: number }
 
 const EMPTY: GameSnapshot = {
   phase: Phase.Lobby, lobbyName: "", code: "", maxPlayers: 6, hostId: "", players: [],
@@ -51,6 +54,7 @@ export function useGame() {
   const [lastRoll, setLastRoll] = useState<RollEvent | null>(null);
   const [lastMove, setLastMove] = useState<MoveEvent | null>(null);
   const [lastTurnStart, setLastTurnStart] = useState<TurnStartEvent | null>(null);
+  const [lastCard, setLastCard] = useState<CardEvent | null>(null);
   const roomRef = useRef<Room | null>(null);
   const clientRef = useRef<Client | null>(null);
   const attachedRoomId = useRef<string | null>(null);
@@ -67,6 +71,7 @@ export function useGame() {
       players.push({
         id: p.id, name: p.name, avatar: p.avatar ?? "", ready: p.ready, connected: p.connected ?? true,
         money: p.money ?? 0, position: p.position ?? 0, bankrupt: p.bankrupt ?? false,
+        inJail: p.inJail ?? false, getOutCards: p.getOutCards ?? 0,
       });
     });
     const properties: Record<number, string> = {};
@@ -105,6 +110,9 @@ export function useGame() {
     });
     room.onMessage(ServerMsg.TurnStarted, (m: { playerId: string; deadline: number }) => {
       setLastTurnStart({ ...m, ts: Date.now() });
+    });
+    room.onMessage(ServerMsg.CardDrawn, (m: { playerId: string; deck: "chance" | "chest"; text: string }) => {
+      setLastCard({ ...m, ts: Date.now() });
     });
     room.onLeave(() => {
       roomRef.current = null;
@@ -154,6 +162,12 @@ export function useGame() {
   const declineBuy = useCallback(() => {
     roomRef.current?.send(ClientMsg.DeclineBuy);
   }, []);
+  const payJailFine = useCallback(() => {
+    roomRef.current?.send(ClientMsg.PayJailFine);
+  }, []);
+  const useJailCard = useCallback(() => {
+    roomRef.current?.send(ClientMsg.UseJailCard);
+  }, []);
 
   const leave = useCallback(() => {
     try { roomRef.current?.leave(); } catch {}
@@ -165,9 +179,9 @@ export function useGame() {
   useEffect(() => () => { try { roomRef.current?.leave(); } catch {} }, []);
 
   return {
-    status, error, snapshot, mySessionId, lastRoll, lastMove, lastTurnStart,
+    status, error, snapshot, mySessionId, lastRoll, lastMove, lastTurnStart, lastCard,
     createGame, joinByCode, setReady, startGame,
-    rollDice, buyProperty, declineBuy,
+    rollDice, buyProperty, declineBuy, payJailFine, useJailCard,
     leave,
   };
 }

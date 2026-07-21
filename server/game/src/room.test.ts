@@ -195,11 +195,89 @@ describe("GameRoom (интеграция)", () => {
     restore();
     const pa = room.state.players.get(a.sessionId);
     assert.equal(pa.position, GAME_CONFIG.jailTileId);
+    assert.equal(pa.inJail, true);
 
     await new Promise((r) => setTimeout(r, GAME_CONFIG.resolveDelayMs + 200));
     await settle(room);
     assert.equal(room.state.currentPlayerId, b.sessionId); // 3 дубля — доп. хода нет, очередь дальше
 
+    await a.leave(); await b.leave();
+  });
+
+  // Хелпер: довести комнату до фазы playing с 2 игроками, вернуть клиентов.
+  async function startedGame() {
+    const room = await colyseus.createRoom("game", {});
+    const a = await colyseus.connectTo(room, { name: "A" });
+    const b = await colyseus.connectTo(room, { name: "B" });
+    await settle(room);
+    a.send(ClientMsg.SetReady, { ready: true });
+    b.send(ClientMsg.SetReady, { ready: true });
+    await settle(room);
+    a.send(ClientMsg.StartGame);
+    await new Promise((r) => setTimeout(r, GAME_CONFIG.countdownMs + 200));
+    await settle(room);
+    return { room, a, b };
+  }
+
+  it("клетка «Иди в тюрьму» сажает в тюрьму", async () => {
+    const { room, a, b } = await startedGame();
+    const pa = room.state.players.get(a.sessionId);
+    pa.position = 25; // 25 + 5 = 30 = клетка «Иди в тюрьму»
+    const restore = mockDice(2, 3);
+    a.send(ClientMsg.RollDice);
+    await settle(room);
+    restore();
+    assert.equal(pa.inJail, true);
+    assert.equal(pa.position, GAME_CONFIG.jailTileId);
+    await a.leave(); await b.leave();
+  });
+
+  it("выход из тюрьмы по дублю: игрок ходит на выпавший бросок, доп. хода нет", async () => {
+    const { room, a, b } = await startedGame();
+    const pa = room.state.players.get(a.sessionId);
+    pa.inJail = true;
+    pa.position = GAME_CONFIG.jailTileId; // 10
+    const restore = mockDice(5, 5); // дубль -> выход, 10+10=20 (Бесплатная парковка, без эффекта)
+    a.send(ClientMsg.RollDice);
+    await settle(room);
+    restore();
+    assert.equal(pa.inJail, false);
+    assert.equal(pa.position, 20);
+
+    await new Promise((r) => setTimeout(r, GAME_CONFIG.resolveDelayMs + 200));
+    await settle(room);
+    assert.equal(room.state.currentPlayerId, b.sessionId); // выход по дублю не даёт доп. ход
+    await a.leave(); await b.leave();
+  });
+
+  it("не дубль в тюрьме: остаёмся, ход переходит; штраф освобождает", async () => {
+    const { room, a, b } = await startedGame();
+    const pa = room.state.players.get(a.sessionId);
+    pa.inJail = true;
+    pa.position = GAME_CONFIG.jailTileId;
+    const restore = mockDice(2, 4); // не дубль -> остаёмся (1-я попытка из 3)
+    a.send(ClientMsg.RollDice);
+    await settle(room);
+    restore();
+    assert.equal(pa.inJail, true);
+    assert.equal(pa.jailTurns, 1);
+
+    await new Promise((r) => setTimeout(r, GAME_CONFIG.resolveDelayMs + 200));
+    await settle(room);
+    assert.equal(room.state.currentPlayerId, b.sessionId);
+    await a.leave(); await b.leave();
+  });
+
+  it("оплата штрафа освобождает из тюрьмы", async () => {
+    const { room, a, b } = await startedGame();
+    const pa = room.state.players.get(a.sessionId);
+    pa.inJail = true;
+    pa.position = GAME_CONFIG.jailTileId;
+    const before = pa.money;
+    a.send(ClientMsg.PayJailFine);
+    await settle(room);
+    assert.equal(pa.inJail, false);
+    assert.equal(pa.money, before - GAME_CONFIG.jailFine);
     await a.leave(); await b.leave();
   });
 

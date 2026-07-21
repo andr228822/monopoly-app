@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { canStart, pushRateWindow, computeMove, isPurchasable, rentFor, nextAlivePlayerId, resolveWinner } from "./logic";
-import { tileAt, GAME_CONFIG } from "@monopoly/shared";
+import { canStart, pushRateWindow, computeMove, isPurchasable, rentFor, nextAlivePlayerId, resolveWinner, jailRollOutcome, moveToTile } from "./logic";
+import { tileAt, GAME_CONFIG, drawCard, CHANCE_DECK, CHEST_DECK, MONEY_SCALE } from "@monopoly/shared";
 
 describe("canStart", () => {
   it("меньше минимума игроков — нельзя", () => {
@@ -81,5 +81,45 @@ describe("resolveWinner", () => {
   });
   it("никого не осталось — пустая строка", () => {
     assert.equal(resolveWinner([{ id: "a", bankrupt: true }]), "");
+  });
+});
+
+describe("jailRollOutcome", () => {
+  it("дубль — всегда выход", () => {
+    assert.equal(jailRollOutcome(true, 1, 3), "escape");
+    assert.equal(jailRollOutcome(true, 3, 3), "escape");
+  });
+  it("не дубль, попытки не исчерпаны — остаёмся", () => {
+    assert.equal(jailRollOutcome(false, 1, 3), "stay");
+    assert.equal(jailRollOutcome(false, 2, 3), "stay");
+  });
+  it("не дубль, попытки исчерпаны — принудительный выход со штрафом", () => {
+    assert.equal(jailRollOutcome(false, 3, 3), "forced_pay");
+  });
+});
+
+describe("moveToTile", () => {
+  it("вперёд без прохода Старта", () => {
+    assert.deepEqual(moveToTile(5, 20), { to: 20, passedGo: false });
+  });
+  it("на клетку позади — значит прошли Старт", () => {
+    assert.deepEqual(moveToTile(36, 5), { to: 5, passedGo: true });
+  });
+});
+
+describe("колоды карт", () => {
+  it("суммы отмасштабированы ×MONEY_SCALE", () => {
+    // "Банк выплачивает дивиденды" в Шансе = базовые 50 → 50*MONEY_SCALE
+    const dividend = CHANCE_DECK.find((c) => c.text.includes("дивиденды"));
+    assert.equal(dividend?.amount, 50 * MONEY_SCALE);
+  });
+  it("в обеих колодах есть «в тюрьму» и «выход бесплатно»", () => {
+    for (const deck of [CHANCE_DECK, CHEST_DECK]) {
+      assert.ok(deck.some((c) => c.effect === "go_to_jail"));
+      assert.ok(deck.some((c) => c.effect === "get_out_free"));
+    }
+  });
+  it("drawCard с детерминированным rnd возвращает конкретную карту", () => {
+    assert.equal(drawCard("chance", () => 0), CHANCE_DECK[0]);
   });
 });

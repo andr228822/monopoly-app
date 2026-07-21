@@ -68,6 +68,24 @@ export function isDouble(d1: number, d2: number): boolean {
   return d1 === d2;
 }
 
+// Исход броска кубиков в тюрьме:
+//  escape     — выпал дубль, выходим и ходим на этот бросок (без доп. хода);
+//  forced_pay — исчерпаны попытки (это N-я неудача), выход принудительный со штрафом;
+//  stay       — остаёмся в тюрьме, ход переходит дальше.
+export function jailRollOutcome(
+  double: boolean,
+  jailTurnsAfter: number, // сколько неудачных попыток УЖЕ накоплено (включая текущую)
+  maxJailTurns = GAME_CONFIG.maxJailTurns
+): "escape" | "forced_pay" | "stay" {
+  if (double) return "escape";
+  return jailTurnsAfter >= maxJailTurns ? "forced_pay" : "stay";
+}
+
+// Перемещение на конкретную клетку (карта): вперёд по кругу, с проходом Старта.
+export function moveToTile(from: number, to: number): { to: number; passedGo: boolean } {
+  return { to, passedGo: to < from }; // если целевая клетка «позади» — значит прошли Старт
+}
+
 // Победитель: если живых (не банкрот) участников <= 1 — вернуть его id ("" если никого).
 export function resolveWinner<T extends { id: string; bankrupt?: boolean }>(players: T[]): string | null {
   const alive = players.filter((p) => !p.bankrupt);

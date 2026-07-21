@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { BOARD, TileType } from "@monopoly/shared";
-import type { PlayerView, MoveEvent, RollEvent, TurnStartEvent } from "./net/useGame";
+import { BOARD, TileType, GAME_CONFIG } from "@monopoly/shared";
+
+const JAIL_FINE = GAME_CONFIG.jailFine;
+import type { PlayerView, MoveEvent, RollEvent, TurnStartEvent, CardEvent } from "./net/useGame";
 import { gridPos } from "./boardLayout";
 import { Tokens } from "./Tokens";
 import { Dice, DICE_ANIMATION_MS } from "./Dice";
@@ -38,8 +40,8 @@ function pickTwoQuadrants(rng: () => number): [{ left: number; top: number }, { 
 
 export function Board({
   players, properties, currentPlayerId, mySessionId,
-  dice1, dice2, awaitingBuyTileId, phase, winnerId, lastRoll, lastMove, lastTurnStart,
-  onRoll, onBuy, onDecline,
+  dice1, dice2, awaitingBuyTileId, phase, winnerId, lastRoll, lastMove, lastTurnStart, lastCard,
+  onRoll, onBuy, onDecline, onPayJailFine, onUseJailCard,
 }: {
   players: PlayerView[];
   properties: Record<number, string>;
@@ -53,14 +55,19 @@ export function Board({
   lastRoll: RollEvent | null;
   lastMove: MoveEvent | null;
   lastTurnStart: TurnStartEvent | null;
+  lastCard: CardEvent | null;
   onRoll: () => void;
   onBuy: () => void;
   onDecline: () => void;
+  onPayJailFine: () => void;
+  onUseJailCard: () => void;
 }) {
   const colorOf = (playerId: string) => PLAYER_COLORS[players.findIndex((p) => p.id === playerId) % PLAYER_COLORS.length];
   const isMyTurn = currentPlayerId === mySessionId;
+  const me = players.find((p) => p.id === mySessionId);
   const awaitingTile = awaitingBuyTileId !== 255 ? BOARD[awaitingBuyTileId] : null;
   const rolled = dice1 > 0 || dice2 > 0;
+  const inJailNotRolled = isMyTurn && !!me?.inJail && !rolled;
 
   // Секундомер хода — тикаем раз в полсекунды, пока идёт партия.
   const [now, setNow] = useState(() => Date.now());
@@ -87,6 +94,17 @@ export function Board({
     const seed = hashStr(lastRoll.playerId) ^ (lastRoll.d1 * 7919 + lastRoll.d2 * 104729);
     setDicePos(pickTwoQuadrants(mulberry32(seed)));
   }, [lastRoll]);
+
+  // Тост вытянутой карты — показываем ~4.5с, потом скрываем.
+  const [card, setCard] = useState<CardEvent | null>(null);
+  const cardTs = useRef(0);
+  useEffect(() => {
+    if (!lastCard || lastCard.ts === cardTs.current) return;
+    cardTs.current = lastCard.ts;
+    setCard(lastCard);
+    const t = setTimeout(() => setCard((c) => (c?.ts === lastCard.ts ? null : c)), 4500);
+    return () => clearTimeout(t);
+  }, [lastCard]);
 
   return (
     <div className="board">
@@ -145,6 +163,17 @@ export function Board({
                 <button onClick={onBuy}>Купить</button>
                 <button onClick={onDecline}>Не покупать</button>
               </div>
+            ) : inJailNotRolled ? (
+              <div className="buyBox">
+                <p className="note">🔒 Ты в тюрьме — выбрось дубль, чтобы выйти</p>
+                <button onClick={onRoll}>🎲 Бросить (на дубль)</button>
+                <button onClick={onPayJailFine} disabled={(me?.money ?? 0) < JAIL_FINE}>
+                  Заплатить ${fmt(JAIL_FINE)}
+                </button>
+                {(me?.getOutCards ?? 0) > 0 && (
+                  <button onClick={onUseJailCard}>Использовать карту освобождения</button>
+                )}
+              </div>
             ) : isMyTurn && !rolled ? (
               <div className="buyBox">
                 <button onClick={onRoll}>🎲 Бросить кубики</button>
@@ -157,11 +186,22 @@ export function Board({
         <ul className="players">
           {players.map((p) => (
             <li key={p.id} style={{ color: colorOf(p.id) }}>
-              {p.name} — ${fmt(p.money)} {p.bankrupt ? "💀" : ""}
+              {p.name} — ${fmt(p.money)}
+              {p.inJail ? " 🔒" : ""}
+              {p.getOutCards > 0 ? ` 🃏×${p.getOutCards}` : ""}
+              {p.bankrupt ? " 💀" : ""}
             </li>
           ))}
         </ul>
       </div>
+
+      {card && (
+        <div className={`cardToast ${card.deck}`}>
+          <div className="cardToastTitle">{card.deck === "chance" ? "🎲 Шанс" : "💰 Казна"}</div>
+          <div className="cardToastText">{card.text}</div>
+          <div className="cardToastWho">{players.find((p) => p.id === card.playerId)?.name || ""}</div>
+        </div>
+      )}
     </div>
   );
 }
