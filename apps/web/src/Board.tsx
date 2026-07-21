@@ -6,6 +6,9 @@ import { Tokens } from "./Tokens";
 import { Dice, DICE_ANIMATION_MS } from "./Dice";
 import { mulberry32, hashStr } from "./seededRandom";
 
+// Крупные суммы с разделителями разрядов: 2000000 → "2 000 000".
+const fmt = (n: number) => n.toLocaleString("ru-RU");
+
 const PLAYER_COLORS = ["#e63946", "#457b9d", "#f4a261", "#2a9d8f", "#e9c46a", "#9d4edd"];
 
 const GROUP_COLORS: Record<string, string> = {
@@ -103,8 +106,8 @@ export function Board({
           >
             {tile.group && <div className="tileGroup" style={{ background: GROUP_COLORS[tile.group] }} />}
             <div className="tileName">{tile.name}</div>
-            {tile.price ? <div className="tilePrice">${tile.price}</div> : null}
-            {tile.tax ? <div className="tilePrice">${tile.tax}</div> : null}
+            {tile.price ? <div className="tilePrice">${fmt(tile.price)}</div> : null}
+            {tile.tax ? <div className="tilePrice">${fmt(tile.tax)}</div> : null}
           </div>
         );
       })}
@@ -138,7 +141,7 @@ export function Board({
             {rolled && lastRoll?.isDouble && <p className="doubleBadge">🎲 Дубль! Ещё бросок</p>}
             {isMyTurn && awaitingTile ? (
               <div className="buyBox">
-                <p>Купить «{awaitingTile.name}» за ${awaitingTile.price}?</p>
+                <p>Купить «{awaitingTile.name}» за ${fmt(awaitingTile.price!)}?</p>
                 <button onClick={onBuy}>Купить</button>
                 <button onClick={onDecline}>Не покупать</button>
               </div>
@@ -154,7 +157,7 @@ export function Board({
         <ul className="players">
           {players.map((p) => (
             <li key={p.id} style={{ color: colorOf(p.id) }}>
-              {p.name} — ${p.money} {p.bankrupt ? "💀" : ""}
+              {p.name} — ${fmt(p.money)} {p.bankrupt ? "💀" : ""}
             </li>
           ))}
         </ul>

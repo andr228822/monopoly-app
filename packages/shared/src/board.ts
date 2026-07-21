@@ -24,7 +24,11 @@ export interface Tile {
   tax?: number;      // сумма налога (Tax)
 }
 
-export const BOARD: Tile[] = [
+// Множитель экономики: базовые числа ниже — классические, наружу отдаём ×MONEY_SCALE
+// (крупные «настоящие» суммы под стартовый капитал 2 млн). Пропорции сохраняются.
+export const MONEY_SCALE = 1000;
+
+const BOARD_BASE: Tile[] = [
   { id: 0, type: TileType.Go, name: "Старт" },
   { id: 1, type: TileType.Property, name: "Лесная ул.", group: "brown", price: 60, rent: 2 },
   { id: 2, type: TileType.Chest, name: "Казна" },
@@ -66,6 +70,14 @@ export const BOARD: Tile[] = [
   { id: 38, type: TileType.Tax, name: "Налог на роскошь", tax: 100 },
   { id: 39, type: TileType.Property, name: "Императорская пл.", group: "darkblue", price: 400, rent: 50 },
 ];
+
+const scale = (v?: number) => (v == null ? v : v * MONEY_SCALE);
+export const BOARD: Tile[] = BOARD_BASE.map((t) => ({
+  ...t,
+  price: scale(t.price),
+  rent: scale(t.rent),
+  tax: scale(t.tax),
+}));
 
 export function tileAt(id: number): Tile {
   return BOARD[((id % 40) + 40) % 40];

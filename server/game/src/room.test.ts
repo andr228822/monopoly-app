@@ -1,8 +1,10 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { boot, ColyseusTestServer } from "@colyseus/testing";
-import { ClientMsg, GAME_CONFIG } from "@monopoly/shared";
+import { ClientMsg, GAME_CONFIG, tileAt } from "@monopoly/shared";
 import { GameRoom } from "./rooms/GameRoom";
+
+const RAILROAD5_PRICE = tileAt(5).price!; // цена «Северного вокзала» (клетка 5)
 
 // Кубики детерминируем через Math.random для интеграционных тестов Фазы 1.
 // ВАЖНО: send() лишь кладёт сообщение в очередь — сервер обрабатывает его позже,
@@ -90,7 +92,7 @@ describe("GameRoom (интеграция)", () => {
     a.send(ClientMsg.BuyProperty);
     await settle(room);
     assert.equal(room.state.properties.get("5").ownerId, a.sessionId);
-    assert.equal(pa.money, GAME_CONFIG.startingMoney - 200);
+    assert.equal(pa.money, GAME_CONFIG.startingMoney - RAILROAD5_PRICE);
     assert.equal(room.state.awaitingBuyTileId, 255);
 
     // Ручной "конец хода" не нужен — сервер сам передаёт очередь после паузы.
@@ -123,7 +125,7 @@ describe("GameRoom (интеграция)", () => {
     assert.equal(room.state.currentPlayerId, b.sessionId);
 
     const pb = room.state.players.get(b.sessionId);
-    pb.money = 10; // у B почти нет денег — аренда 25 уведёт в минус
+    pb.money = 10; // у B почти нет денег — аренда ж.д. уведёт в минус
     restore = mockDice(2, 3); // B тоже попадает на клетку 5 (чужую)
     b.send(ClientMsg.RollDice);
     await settle(room);
@@ -202,9 +204,9 @@ describe("GameRoom (интеграция)", () => {
   });
 
   it("таймер хода: не успел походить — ход пропускается автоматически", async () => {
-    // turnMs=500 с запасом от +200мс буфера ожидания countdown — иначе первая
-    // проверка попадает точно на границу истечения таймера (гонка).
-    const room = await colyseus.createRoom("game", { turnMs: 500 });
+    // Широкое окно: A истекает в 2000мс, B — в 4000мс; проверяем в 2500мс.
+    // Запас в ~1.5с с каждой стороны устойчив к дрожанию таймеров под нагрузкой сьюты.
+    const room = await colyseus.createRoom("game", { turnMs: 2000 });
     const a = await colyseus.connectTo(room, { name: "A" });
     const b = await colyseus.connectTo(room, { name: "B" });
     await settle(room);
@@ -216,9 +218,8 @@ describe("GameRoom (интеграция)", () => {
     await settle(room);
     assert.equal(room.state.currentPlayerId, a.sessionId);
 
-    // A ничего не делает — таймер (500мс) должен сам передать ход к B
-    // (проверяем в окне ПОСЛЕ истечения таймера A, но ДО истечения таймера B).
-    await new Promise((r) => setTimeout(r, 650));
+    // A ничего не делает — таймер сам передаёт ход к B (окно [2000, 4000]мс).
+    await new Promise((r) => setTimeout(r, 2500));
     await settle(room);
     assert.equal(room.state.currentPlayerId, b.sessionId);
 

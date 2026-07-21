@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { canStart, pushRateWindow, computeMove, isPurchasable, rentFor, nextAlivePlayerId, resolveWinner } from "./logic";
-import { tileAt } from "@monopoly/shared";
+import { tileAt, GAME_CONFIG } from "@monopoly/shared";
 
 describe("canStart", () => {
   it("меньше минимума игроков — нельзя", () => {
@@ -59,7 +59,7 @@ describe("isPurchasable / rentFor", () => {
     assert.equal(rentFor(tileAt(1), 1, 1), tileAt(1).rent);
   });
   it("аренда коммунальной — по сумме кубиков", () => {
-    assert.equal(rentFor(tileAt(12), 3, 4), 7 * 4);
+    assert.equal(rentFor(tileAt(12), 3, 4), 7 * GAME_CONFIG.utilityRentPerDice);
   });
 });
 
