@@ -18,6 +18,22 @@ export interface PlayerView {
 
 export interface PropView { ownerId: string; houses: number; mortgaged: boolean }
 
+export interface TradeView {
+  fromId: string; toId: string;
+  offerProps: number[]; requestProps: number[];
+  offerMoney: number; requestMoney: number;
+  offerCards: number; requestCards: number;
+  deadline: number;
+}
+
+// Условия предложения обмена, отправляемые на сервер.
+export interface TradeProposal {
+  toId: string;
+  offerProps: number[]; requestProps: number[];
+  offerMoney: number; requestMoney: number;
+  offerCards: number; requestCards: number;
+}
+
 export interface GameSnapshot {
   phase: string;
   lobbyName: string;
@@ -36,6 +52,7 @@ export interface GameSnapshot {
   auctionBidderId: string;
   auctionBidders: string[];
   auctionDeadline: number;
+  trade: TradeView;        // fromId === "" — активного обмена нет
 }
 
 export type Status = "idle" | "connecting" | "connected" | "error";
@@ -46,11 +63,18 @@ export interface RollEvent { playerId: string; d1: number; d2: number; isDouble:
 export interface MoveEvent { playerId: string; from: number; to: number; passedGo: boolean; direct?: boolean; ts: number }
 export interface TurnStartEvent { playerId: string; deadline: number; ts: number }
 export interface CardEvent { playerId: string; deck: "chance" | "chest"; text: string; ts: number }
+export interface TradeEvent { fromId: string; toId: string; accepted: boolean; ts: number }
+
+const EMPTY_TRADE: TradeView = {
+  fromId: "", toId: "", offerProps: [], requestProps: [],
+  offerMoney: 0, requestMoney: 0, offerCards: 0, requestCards: 0, deadline: 0,
+};
 
 const EMPTY: GameSnapshot = {
   phase: Phase.Lobby, lobbyName: "", code: "", maxPlayers: 6, hostId: "", players: [],
   currentPlayerId: "", dice1: 0, dice2: 0, awaitingBuyTileId: 255, properties: {}, winnerId: "",
   auctionTileId: 255, auctionBid: 0, auctionBidderId: "", auctionBidders: [], auctionDeadline: 0,
+  trade: EMPTY_TRADE,
 };
 
 // Хук подключения к игровому серверу. Зеркалит состояние комнаты в React.
@@ -63,6 +87,7 @@ export function useGame() {
   const [lastMove, setLastMove] = useState<MoveEvent | null>(null);
   const [lastTurnStart, setLastTurnStart] = useState<TurnStartEvent | null>(null);
   const [lastCard, setLastCard] = useState<CardEvent | null>(null);
+  const [lastTrade, setLastTrade] = useState<TradeEvent | null>(null);
   const roomRef = useRef<Room | null>(null);
   const clientRef = useRef<Client | null>(null);
   const attachedRoomId = useRef<string | null>(null);
@@ -104,6 +129,17 @@ export function useGame() {
       auctionBidderId: state.auctionBidderId ?? "",
       auctionBidders: state.auctionBidders ? [...state.auctionBidders] : [],
       auctionDeadline: state.auctionDeadline ?? 0,
+      trade: state.trade ? {
+        fromId: state.trade.fromId ?? "",
+        toId: state.trade.toId ?? "",
+        offerProps: state.trade.offerProps ? [...state.trade.offerProps] : [],
+        requestProps: state.trade.requestProps ? [...state.trade.requestProps] : [],
+        offerMoney: state.trade.offerMoney ?? 0,
+        requestMoney: state.trade.requestMoney ?? 0,
+        offerCards: state.trade.offerCards ?? 0,
+        requestCards: state.trade.requestCards ?? 0,
+        deadline: state.trade.deadline ?? 0,
+      } : EMPTY_TRADE,
     });
   }, []);
 
@@ -126,6 +162,9 @@ export function useGame() {
     });
     room.onMessage(ServerMsg.CardDrawn, (m: { playerId: string; deck: "chance" | "chest"; text: string }) => {
       setLastCard({ ...m, ts: Date.now() });
+    });
+    room.onMessage(ServerMsg.TradeResolved, (m: { fromId: string; toId: string; accepted: boolean }) => {
+      setLastTrade({ ...m, ts: Date.now() });
     });
     room.onLeave(() => {
       roomRef.current = null;
@@ -199,6 +238,15 @@ export function useGame() {
   const auctionPass = useCallback(() => {
     roomRef.current?.send(ClientMsg.AuctionPass);
   }, []);
+  const proposeTrade = useCallback((proposal: TradeProposal) => {
+    roomRef.current?.send(ClientMsg.ProposeTrade, proposal);
+  }, []);
+  const acceptTrade = useCallback(() => {
+    roomRef.current?.send(ClientMsg.AcceptTrade);
+  }, []);
+  const declineTrade = useCallback(() => {
+    roomRef.current?.send(ClientMsg.DeclineTrade);
+  }, []);
 
   const leave = useCallback(() => {
     try { roomRef.current?.leave(); } catch {}
@@ -210,10 +258,11 @@ export function useGame() {
   useEffect(() => () => { try { roomRef.current?.leave(); } catch {} }, []);
 
   return {
-    status, error, snapshot, mySessionId, lastRoll, lastMove, lastTurnStart, lastCard,
+    status, error, snapshot, mySessionId, lastRoll, lastMove, lastTurnStart, lastCard, lastTrade,
     createGame, joinByCode, setReady, startGame,
     rollDice, buyProperty, declineBuy, payJailFine, useJailCard,
     mortgage, unmortgage, buildHouse, sellHouse, auctionBid, auctionPass,
+    proposeTrade, acceptTrade, declineTrade,
     leave,
   };
 }

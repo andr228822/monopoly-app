@@ -7,7 +7,8 @@ import {
 import {
   canStart, pushRateWindow, computeMove, isPurchasable, rentFor, isDouble,
   jailRollOutcome, moveToTile, nextAlivePlayerId, resolveWinner, tileAt,
-  mortgageValue, unmortgageCost, canBuildHouse, canSellHouse, type PropsMap,
+  mortgageValue, unmortgageCost, canBuildHouse, canSellHouse, validateTrade,
+  type PropsMap, type TradeTerms,
 } from "../logic";
 
 interface CreateOptions {
@@ -31,6 +32,7 @@ export class GameRoom extends Room<GameState> {
   private turnMs: number = GAME_CONFIG.turnMs;
   private turnTimer?: any;
   private auctionTimer?: any;
+  private tradeTimer?: any;
   private turnDoubles = 0; // подряд выпавших дублей у текущего игрока в этом ходу
   // Что делать после разрешения клетки (может ждать решения о покупке — см. afterResolve).
   private pendingResolution: "advance" | "reroll" | null = null;
@@ -108,6 +110,19 @@ export class GameRoom extends Room<GameState> {
       if (this.rateLimited(client)) return;
       this.handleAuctionPass(client);
     });
+
+    this.onMessage(ClientMsg.ProposeTrade, (client, msg: any) => {
+      if (this.rateLimited(client)) return;
+      this.handleProposeTrade(client, msg);
+    });
+    this.onMessage(ClientMsg.AcceptTrade, (client) => {
+      if (this.rateLimited(client)) return;
+      this.handleAcceptTrade(client);
+    });
+    this.onMessage(ClientMsg.DeclineTrade, (client) => {
+      if (this.rateLimited(client)) return;
+      this.handleDeclineTrade(client);
+    });
   }
 
   private rateLimited(client: Client): boolean {
@@ -150,6 +165,18 @@ export class GameRoom extends Room<GameState> {
 
   private removePlayer(sessionId: string) {
     const p = this.state.players.get(sessionId);
+    // Ушедший участвовал в обмене — снимаем предложение. Если ушёл получатель,
+    // а предложивший (текущий игрок) остаётся — вернуть ему таймер хода (он был
+    // на паузе на время обмена), иначе ход зависнет.
+    if (this.state.trade.fromId &&
+        (this.state.trade.fromId === sessionId || this.state.trade.toId === sessionId)) {
+      const proposerId = this.state.trade.fromId;
+      this.clearTrade();
+      if (proposerId !== sessionId && this.state.phase === Phase.Playing &&
+          this.state.currentPlayerId === proposerId) {
+        this.startTurnTimer();
+      }
+    }
     // В разгаре матча ушедший игрок навсегда — считаем банкротом, чтобы игра
     // не зависла в ожидании его хода (Фаза 1: полноценного удаления из партии нет).
     if (p && this.state.phase === Phase.Playing && !p.bankrupt) {
@@ -211,6 +238,7 @@ export class GameRoom extends Room<GameState> {
     this.state.dice2 = 0;
     this.state.awaitingBuyTileId = 255;
     this.clearAuction();
+    this.clearTrade();
     this.state.currentPlayerId = this.turnOrder[0] || "";
     this.turnDoubles = 0;
     this.pendingResolution = null;
@@ -245,6 +273,7 @@ export class GameRoom extends Room<GameState> {
   private handleRollDice(client: Client) {
     if (this.state.phase !== Phase.Playing) return;
     if (client.sessionId !== this.state.currentPlayerId) return;
+    if (this.state.trade.fromId) return; // сначала заверши обмен
     if (this.state.awaitingBuyTileId !== 255) return; // сначала реши покупку
     const p = this.state.players.get(client.sessionId);
     if (!p || p.bankrupt) return;
@@ -469,6 +498,7 @@ export class GameRoom extends Room<GameState> {
   private handlePayJailFine(client: Client) {
     if (this.state.phase !== Phase.Playing) return;
     if (client.sessionId !== this.state.currentPlayerId) return;
+    if (this.state.trade.fromId) return; // сначала заверши обмен
     const p = this.state.players.get(client.sessionId);
     if (!p || !p.inJail || p.money < GAME_CONFIG.jailFine) return;
     if (this.state.dice1 || this.state.dice2) return; // уже бросил в этот ход
@@ -481,6 +511,7 @@ export class GameRoom extends Room<GameState> {
   private handleUseJailCard(client: Client) {
     if (this.state.phase !== Phase.Playing) return;
     if (client.sessionId !== this.state.currentPlayerId) return;
+    if (this.state.trade.fromId) return; // сначала заверши обмен
     const p = this.state.players.get(client.sessionId);
     if (!p || !p.inJail || p.getOutCards < 1) return;
     if (this.state.dice1 || this.state.dice2) return; // уже бросил в этот ход
@@ -493,6 +524,7 @@ export class GameRoom extends Room<GameState> {
   private myTurnPlayer(client: Client): Player | null {
     if (this.state.phase !== Phase.Playing) return null;
     if (client.sessionId !== this.state.currentPlayerId) return null;
+    if (this.state.trade.fromId) return null; // во время обмена управление активами заморожено
     const p = this.state.players.get(client.sessionId);
     return p && !p.bankrupt ? p : null;
   }
@@ -611,6 +643,122 @@ export class GameRoom extends Room<GameState> {
     this.state.auctionBidderId = "";
     this.state.auctionBidders.clear();
     this.state.auctionDeadline = 0;
+  }
+
+  // ── Обмен между игроками (Фаза 4) ──
+  // Предложить можно только в свой ход ДО броска (простое окно без гонок с
+  // авто-передачей хода). На время обмена таймер хода на паузе.
+  private sanitizeTradeIds(raw: any): number[] {
+    if (!Array.isArray(raw)) return [];
+    const out: number[] = [];
+    for (const v of raw) {
+      const n = Number(v);
+      if (Number.isInteger(n) && n >= 0 && n < 40 && !out.includes(n)) out.push(n);
+      if (out.length >= 40) break;
+    }
+    return out;
+  }
+
+  private handleProposeTrade(client: Client, msg: any) {
+    if (this.state.phase !== Phase.Playing) return;
+    if (client.sessionId !== this.state.currentPlayerId) return;
+    if (this.state.dice1 || this.state.dice2) return;      // только до броска
+    if (this.state.awaitingBuyTileId !== 255) return;
+    if (this.state.auctionTileId !== 255) return;
+    if (this.state.trade.fromId) return;                    // уже есть активное предложение
+    const from = this.state.players.get(client.sessionId);
+    if (!from || from.bankrupt) return;
+    const toId = String(msg?.toId || "");
+    const to = this.state.players.get(toId);
+    if (!to || to.bankrupt || to.id === from.id) return;
+
+    const terms: TradeTerms = {
+      fromId: from.id, toId: to.id,
+      offerProps: this.sanitizeTradeIds(msg?.offerProps),
+      requestProps: this.sanitizeTradeIds(msg?.requestProps),
+      offerMoney: Math.floor(Number(msg?.offerMoney) || 0),
+      requestMoney: Math.floor(Number(msg?.requestMoney) || 0),
+      offerCards: Math.floor(Number(msg?.offerCards) || 0),
+      requestCards: Math.floor(Number(msg?.requestCards) || 0),
+    };
+    if (!validateTrade(terms, this.propsView(), from.money, to.money, from.getOutCards, to.getOutCards)) return;
+
+    const tr = this.state.trade;
+    tr.fromId = terms.fromId;
+    tr.toId = terms.toId;
+    tr.offerProps.clear(); terms.offerProps.forEach((id) => tr.offerProps.push(id));
+    tr.requestProps.clear(); terms.requestProps.forEach((id) => tr.requestProps.push(id));
+    tr.offerMoney = terms.offerMoney;
+    tr.requestMoney = terms.requestMoney;
+    tr.offerCards = terms.offerCards;
+    tr.requestCards = terms.requestCards;
+
+    if (this.turnTimer) { this.turnTimer.clear(); this.turnTimer = undefined; } // таймер хода на паузу
+    tr.deadline = Math.floor((Date.now() + GAME_CONFIG.tradeMs) / 1000);         // сек, не мс (uint32)
+    this.tradeTimer = this.clock.setTimeout(() => this.resolveTrade(false), GAME_CONFIG.tradeMs);
+    console.log(`[room ${this.roomId}] обмен: ${from.name} → ${to.name}`);
+  }
+
+  private handleAcceptTrade(client: Client) {
+    const tr = this.state.trade;
+    if (!tr.fromId || client.sessionId !== tr.toId) return; // принимает только получатель
+    this.resolveTrade(true);
+  }
+
+  private handleDeclineTrade(client: Client) {
+    const tr = this.state.trade;
+    if (!tr.fromId) return;
+    if (client.sessionId !== tr.toId && client.sessionId !== tr.fromId) return; // отклонить/отменить
+    this.resolveTrade(false);
+  }
+
+  // Завершение обмена. accepted=true — исполняем (с повторной валидацией),
+  // иначе просто снимаем предложение. В любом случае возобновляем ход предлагавшего.
+  private resolveTrade(accepted: boolean) {
+    const tr = this.state.trade;
+    if (!tr.fromId) return;
+    const fromId = tr.fromId, toId = tr.toId;
+    const from = this.state.players.get(fromId);
+    const to = this.state.players.get(toId);
+    let done = false;
+
+    if (accepted && from && to && !from.bankrupt && !to.bankrupt) {
+      const terms: TradeTerms = {
+        fromId, toId,
+        offerProps: [...tr.offerProps], requestProps: [...tr.requestProps],
+        offerMoney: tr.offerMoney, requestMoney: tr.requestMoney,
+        offerCards: tr.offerCards, requestCards: tr.requestCards,
+      };
+      if (validateTrade(terms, this.propsView(), from.money, to.money, from.getOutCards, to.getOutCards)) {
+        from.money += terms.requestMoney - terms.offerMoney; // нетто по деньгам
+        to.money += terms.offerMoney - terms.requestMoney;
+        from.getOutCards += terms.requestCards - terms.offerCards;
+        to.getOutCards += terms.offerCards - terms.requestCards;
+        for (const id of terms.offerProps) { const pr = this.state.properties.get(String(id)); if (pr) pr.ownerId = toId; }
+        for (const id of terms.requestProps) { const pr = this.state.properties.get(String(id)); if (pr) pr.ownerId = fromId; }
+        done = true;
+        console.log(`[room ${this.roomId}] обмен принят: ${from.name} ↔ ${to.name}`);
+      }
+    }
+
+    this.clearTrade();
+    this.broadcast(ServerMsg.TradeResolved, { fromId, toId, accepted: done });
+    // возобновляем ход предлагавшего — таймер хода был на паузе.
+    if (this.state.phase === Phase.Playing && this.state.currentPlayerId) this.startTurnTimer();
+  }
+
+  private clearTrade() {
+    if (this.tradeTimer) { this.tradeTimer.clear(); this.tradeTimer = undefined; }
+    const tr = this.state.trade;
+    tr.fromId = "";
+    tr.toId = "";
+    tr.offerProps.clear();
+    tr.requestProps.clear();
+    tr.offerMoney = 0;
+    tr.requestMoney = 0;
+    tr.offerCards = 0;
+    tr.requestCards = 0;
+    tr.deadline = 0;
   }
 
   // Клетка разрешена (и решение о покупке, если было, принято) — либо ещё один

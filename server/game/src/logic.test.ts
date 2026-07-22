@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { canStart, pushRateWindow, computeMove, isPurchasable, rentFor, nextAlivePlayerId, resolveWinner, jailRollOutcome, moveToTile, mortgageValue, unmortgageCost, canBuildHouse, canSellHouse } from "./logic";
+import { canStart, pushRateWindow, computeMove, isPurchasable, rentFor, nextAlivePlayerId, resolveWinner, jailRollOutcome, moveToTile, mortgageValue, unmortgageCost, canBuildHouse, canSellHouse, canTradeProperty, groupHasHouses, validateTrade, type PropsMap, type TradeTerms } from "./logic";
 import { tileAt, GAME_CONFIG, drawCard, CHANCE_DECK, CHEST_DECK, MONEY_SCALE, RAILROAD_RENT } from "@monopoly/shared";
 
 describe("canStart", () => {
@@ -161,6 +161,58 @@ describe("moveToTile", () => {
   });
   it("на клетку позади — значит прошли Старт", () => {
     assert.deepEqual(moveToTile(36, 5), { to: 5, passedGo: true });
+  });
+});
+
+describe("обмен (Фаза 4)", () => {
+  // A владеет коричневой группой (1,3) и вокзалом (5); B владеет клеткой 6.
+  const baseProps = (): PropsMap => ({
+    1: { ownerId: "A", houses: 0, mortgaged: false },
+    3: { ownerId: "A", houses: 0, mortgaged: false },
+    5: { ownerId: "A", houses: 0, mortgaged: false },
+    6: { ownerId: "B", houses: 0, mortgaged: false },
+  });
+  const terms = (o: Partial<TradeTerms> = {}): TradeTerms => ({
+    fromId: "A", toId: "B", offerProps: [], requestProps: [],
+    offerMoney: 0, requestMoney: 0, offerCards: 0, requestCards: 0, ...o,
+  });
+
+  it("canTradeProperty: свою клетку без застройки в группе — можно", () => {
+    assert.equal(canTradeProperty(baseProps(), 5, "A"), true);
+  });
+  it("canTradeProperty: чужую клетку — нельзя", () => {
+    assert.equal(canTradeProperty(baseProps(), 6, "A"), false);
+  });
+  it("canTradeProperty: если в группе есть дом — нельзя", () => {
+    const p = baseProps(); p[1]!.houses = 1;
+    assert.equal(canTradeProperty(p, 3, "A"), false); // 3 из той же коричневой группы
+  });
+  it("groupHasHouses замечает застройку в группе", () => {
+    const p = baseProps(); p[3]!.houses = 2;
+    assert.equal(groupHasHouses(p, "brown"), true);
+    assert.equal(groupHasHouses(baseProps(), "brown"), false);
+  });
+
+  it("validateTrade: корректный обмен участок ↔ деньги", () => {
+    assert.equal(validateTrade(terms({ offerProps: [5], requestMoney: 100 }), baseProps(), 1000, 1000, 0, 0), true);
+  });
+  it("validateTrade: пустой обмен — нельзя", () => {
+    assert.equal(validateTrade(terms(), baseProps(), 1000, 1000, 0, 0), false);
+  });
+  it("validateTrade: сам себе — нельзя", () => {
+    assert.equal(validateTrade(terms({ toId: "A", offerProps: [5] }), baseProps(), 1000, 1000, 0, 0), false);
+  });
+  it("validateTrade: отдаёт не свою клетку — нельзя", () => {
+    assert.equal(validateTrade(terms({ offerProps: [6] }), baseProps(), 1000, 1000, 0, 0), false);
+  });
+  it("validateTrade: не хватает денег у предлагающего — нельзя", () => {
+    assert.equal(validateTrade(terms({ offerMoney: 5000 }), baseProps(), 1000, 1000, 0, 0), false);
+  });
+  it("validateTrade: получатель не имеет столько карт — нельзя", () => {
+    assert.equal(validateTrade(terms({ requestCards: 2 }), baseProps(), 1000, 1000, 0, 1), false);
+  });
+  it("validateTrade: отрицательные суммы — нельзя", () => {
+    assert.equal(validateTrade(terms({ offerMoney: -100 }), baseProps(), 1000, 1000, 0, 0), false);
   });
 });
 

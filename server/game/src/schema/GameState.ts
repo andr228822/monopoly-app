@@ -26,6 +26,20 @@ export class PropertyState extends Schema {
   @type("boolean") mortgaged = false; // заложено — аренда не берётся
 }
 
+// Активное предложение обмена (Фаза 4). fromId === "" — обмена нет.
+// offer* — что отдаёт предлагающий (fromId), request* — что просит взамен у получателя (toId).
+export class TradeOffer extends Schema {
+  @type("string") fromId = "";
+  @type("string") toId = "";
+  @type(["uint8"]) offerProps = new ArraySchema<number>();   // id клеток от предлагающего
+  @type(["uint8"]) requestProps = new ArraySchema<number>(); // id клеток от получателя
+  @type("int32") offerMoney = 0;
+  @type("int32") requestMoney = 0;
+  @type("uint8") offerCards = 0;   // карты «выход из тюрьмы»
+  @type("uint8") requestCards = 0;
+  @type("uint32") deadline = 0;    // сек эпохи — для отсчёта на клиенте
+}
+
 export class GameState extends Schema {
   @type("string") phase = "lobby";
   @type("string") lobbyName = "";
@@ -47,4 +61,7 @@ export class GameState extends Schema {
   @type("string") auctionBidderId = ""; // текущий лидер ("" = ставок нет)
   @type(["string"]) auctionBidders = new ArraySchema<string>(); // кто ещё в торгах
   @type("uint32") auctionDeadline = 0;  // ms epoch — для отсчёта на клиенте
+
+  // Обмен (Фаза 4): постоянный инстанс, fromId === "" когда обмена нет.
+  @type(TradeOffer) trade = new TradeOffer();
 }

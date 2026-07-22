@@ -388,6 +388,72 @@ describe("GameRoom (интеграция)", () => {
     await a.leave(); await b.leave();
   });
 
+  it("обмен: предложение до броска → принятие переносит участок и деньги", async () => {
+    const { room, a, b } = await startedGame();
+    const pa = room.state.players.get(a.sessionId);
+    const pb = room.state.players.get(b.sessionId);
+    grant(room, a.sessionId, [5]); // A владеет Северным вокзалом
+    const aMoney = pa.money, bMoney = pb.money;
+
+    // A (текущий игрок) предлагает: отдаёт клетку 5, просит 300000.
+    a.send(ClientMsg.ProposeTrade, { toId: b.sessionId, offerProps: [5], requestMoney: 300000 });
+    await settle(room);
+    assert.equal(room.state.trade.fromId, a.sessionId);
+    assert.equal(room.state.trade.toId, b.sessionId);
+
+    // Не получатель принять не может.
+    a.send(ClientMsg.AcceptTrade);
+    await settle(room);
+    assert.equal(room.state.trade.fromId, a.sessionId);
+
+    b.send(ClientMsg.AcceptTrade);
+    await settle(room);
+    assert.equal(room.state.trade.fromId, ""); // обмен завершён
+    assert.equal(room.state.properties.get("5").ownerId, b.sessionId);
+    assert.equal(pa.money, aMoney + 300000);
+    assert.equal(pb.money, bMoney - 300000);
+    await a.leave(); await b.leave();
+  });
+
+  it("обмен: отклонение получателем ничего не меняет, ход возобновляется", async () => {
+    const { room, a, b } = await startedGame();
+    const pa = room.state.players.get(a.sessionId);
+    grant(room, a.sessionId, [5]);
+    const before = pa.money;
+
+    a.send(ClientMsg.ProposeTrade, { toId: b.sessionId, offerProps: [5], requestMoney: 100000 });
+    await settle(room);
+    assert.equal(room.state.trade.fromId, a.sessionId);
+
+    b.send(ClientMsg.DeclineTrade);
+    await settle(room);
+    assert.equal(room.state.trade.fromId, "");
+    assert.equal(room.state.properties.get("5").ownerId, a.sessionId); // не перешло
+    assert.equal(pa.money, before);
+    assert.equal(room.state.currentPlayerId, a.sessionId); // ход всё ещё у предлагавшего
+
+    // Ход возобновился — A может бросить кубики.
+    const restore = mockDice(2, 3);
+    a.send(ClientMsg.RollDice);
+    await settle(room);
+    restore();
+    assert.ok(room.state.dice1 > 0);
+    await a.leave(); await b.leave();
+  });
+
+  it("обмен: нельзя предлагать после броска", async () => {
+    const { room, a, b } = await startedGame();
+    grant(room, a.sessionId, [5]);
+    const restore = mockDice(2, 1); // A бросает (не дубль) → клетка 3
+    a.send(ClientMsg.RollDice);
+    await settle(room);
+    restore();
+    a.send(ClientMsg.ProposeTrade, { toId: b.sessionId, offerProps: [5], requestMoney: 1 });
+    await settle(room);
+    assert.equal(room.state.trade.fromId, ""); // предложение отклонено — уже бросил
+    await a.leave(); await b.leave();
+  });
+
   it("выход хоста: игрок удаляется, хост переназначается", async () => {
     const room = await colyseus.createRoom("game", {});
     const a = await colyseus.connectTo(room, { name: "A" });

@@ -24,6 +24,9 @@ export const ClientMsg = {
   SellHouse: "sell_house",        // продать дом/отель (половина цены)
   AuctionBid: "auction_bid",      // поднять ставку на аукционе
   AuctionPass: "auction_pass",    // выйти из аукциона
+  ProposeTrade: "propose_trade",  // предложить обмен другому игроку (Фаза 4)
+  AcceptTrade: "accept_trade",    // получатель принимает обмен
+  DeclineTrade: "decline_trade",  // отклонить (получатель) или отменить (предложивший)
 } as const;
 
 export const ServerMsg = {
@@ -35,6 +38,7 @@ export const ServerMsg = {
   GameOver: "game_over",
   TurnStarted: "turn_started",
   CardDrawn: "card_drawn",        // игрок вытянул карту Шанс/Казна
+  TradeResolved: "trade_resolved", // обмен завершён (принят/отклонён) — для тоста
 } as const;
 
 export interface DiceRolledPayload { playerId: string; d1: number; d2: number; isDouble: boolean }
@@ -46,3 +50,4 @@ export interface PlayerBankruptPayload { playerId: string }
 export interface GameOverPayload { winnerId: string }
 export interface TurnStartedPayload { playerId: string; deadline: number }
 export interface CardDrawnPayload { playerId: string; deck: "chance" | "chest"; text: string }
+export interface TradeResolvedPayload { fromId: string; toId: string; accepted: boolean }

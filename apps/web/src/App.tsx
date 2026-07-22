@@ -53,6 +53,8 @@ export function App() {
           auctionBidderId={game.snapshot.auctionBidderId}
           auctionBidders={game.snapshot.auctionBidders}
           auctionDeadline={game.snapshot.auctionDeadline}
+          trade={game.snapshot.trade}
+          lastTrade={game.lastTrade}
           onRoll={game.rollDice}
           onBuy={game.buyProperty}
           onDecline={game.declineBuy}
@@ -64,6 +66,9 @@ export function App() {
           onSellHouse={game.sellHouse}
           onAuctionBid={game.auctionBid}
           onAuctionPass={game.auctionPass}
+          onProposeTrade={game.proposeTrade}
+          onAcceptTrade={game.acceptTrade}
+          onDeclineTrade={game.declineTrade}
         />
       </div>
     );

@@ -9,7 +9,8 @@ function ownsGroup(properties: Record<number, PropView>, group: string, myId: st
   const tiles = groupTiles(group);
   return tiles.length > 0 && tiles.every((t) => properties[t.id]?.ownerId === myId);
 }
-import type { PlayerView, MoveEvent, RollEvent, TurnStartEvent, CardEvent } from "./net/useGame";
+import type { PlayerView, MoveEvent, RollEvent, TurnStartEvent, CardEvent, TradeView, TradeEvent, TradeProposal } from "./net/useGame";
+import { TradeOverlay, TradeBuilder } from "./Trade";
 import { gridPos } from "./boardLayout";
 import { Tokens } from "./Tokens";
 import { Dice, DICE_ANIMATION_MS } from "./Dice";
@@ -49,8 +50,10 @@ export function Board({
   players, properties, currentPlayerId, mySessionId,
   dice1, dice2, awaitingBuyTileId, phase, winnerId, lastRoll, lastMove, lastTurnStart, lastCard,
   auctionTileId, auctionBid, auctionBidderId, auctionBidders, auctionDeadline,
+  trade, lastTrade,
   onRoll, onBuy, onDecline, onPayJailFine, onUseJailCard,
   onMortgage, onUnmortgage, onBuildHouse, onSellHouse, onAuctionBid, onAuctionPass,
+  onProposeTrade, onAcceptTrade, onDeclineTrade,
 }: {
   players: PlayerView[];
   properties: Record<number, PropView>;
@@ -70,6 +73,8 @@ export function Board({
   auctionBidderId: string;
   auctionBidders: string[];
   auctionDeadline: number;
+  trade: TradeView;
+  lastTrade: TradeEvent | null;
   onRoll: () => void;
   onBuy: () => void;
   onDecline: () => void;
@@ -81,6 +86,9 @@ export function Board({
   onSellHouse: (tileId: number) => void;
   onAuctionBid: (amount: number) => void;
   onAuctionPass: () => void;
+  onProposeTrade: (p: TradeProposal) => void;
+  onAcceptTrade: () => void;
+  onDeclineTrade: () => void;
 }) {
   const colorOf = (playerId: string) => PLAYER_COLORS[players.findIndex((p) => p.id === playerId) % PLAYER_COLORS.length];
   const isMyTurn = currentPlayerId === mySessionId;
@@ -125,6 +133,24 @@ export function Board({
     const t = setTimeout(() => setCard((c) => (c?.ts === lastCard.ts ? null : c)), 4500);
     return () => clearTimeout(t);
   }, [lastCard]);
+
+  // Конструктор обмена (модалка) и тост результата обмена.
+  const [showTradeBuilder, setShowTradeBuilder] = useState(false);
+  const [tradeToast, setTradeToast] = useState<TradeEvent | null>(null);
+  const tradeTs = useRef(0);
+  useEffect(() => {
+    if (!lastTrade || lastTrade.ts === tradeTs.current) return;
+    tradeTs.current = lastTrade.ts;
+    setShowTradeBuilder(false); // предложение ушло/закрылось — прячем конструктор
+    setTradeToast(lastTrade);
+    const t = setTimeout(() => setTradeToast((c) => (c?.ts === lastTrade.ts ? null : c)), 4000);
+    return () => clearTimeout(t);
+  }, [lastTrade]);
+
+  const tradeActive = trade.fromId !== "";
+  const nowSec = Math.floor(now / 1000);
+  const canPropose = isMyTurn && phase === "playing" && !rolled && !tradeActive &&
+    awaitingBuyTileId === 255 && auctionTileId === 255 && players.filter((p) => !p.bankrupt).length >= 2;
 
   return (
     <div className="board">
@@ -222,6 +248,9 @@ export function Board({
         {isMyTurn && phase === "playing" && (
           <div className="manage">
             <div className="manageTitle">Мои владения (управление в свой ход)</div>
+            {canPropose && (
+              <button className="tradeOpenBtn" onClick={() => setShowTradeBuilder(true)}>🤝 Предложить обмен</button>
+            )}
             {BOARD.filter((t) => properties[t.id]?.ownerId === mySessionId).map((t) => {
               const prop = properties[t.id]!;
               const isProp = t.type === TileType.Property;
@@ -297,6 +326,29 @@ export function Board({
           </div>
         );
       })()}
+
+      {/* Активный обмен — модалка для получателя/предлагающего/зрителей. */}
+      {tradeActive && (
+        <TradeOverlay
+          trade={trade} players={players} mySessionId={mySessionId} nowSec={nowSec}
+          onAccept={onAcceptTrade} onDecline={onDeclineTrade}
+        />
+      )}
+
+      {/* Конструктор предложения — открывается кнопкой в панели владений. */}
+      {showTradeBuilder && !tradeActive && me && (
+        <TradeBuilder
+          players={players} me={me} properties={properties} mySessionId={mySessionId}
+          onSubmit={(p) => { onProposeTrade(p); setShowTradeBuilder(false); }}
+          onCancel={() => setShowTradeBuilder(false)}
+        />
+      )}
+
+      {tradeToast && (
+        <div className={`tradeToast ${tradeToast.accepted ? "ok" : "no"}`}>
+          {tradeToast.accepted ? "🤝 Обмен состоялся" : "✖ Обмен отклонён"}
+        </div>
+      )}
     </div>
   );
 }

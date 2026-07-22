@@ -138,6 +138,53 @@ export function canSellHouse(props: PropsMap, tileId: number, ownerId: string): 
   return cur === max;
 }
 
+// ── Обмен между игроками (Фаза 4) ──
+
+// Есть ли хоть один дом на любой клетке цветовой группы (нельзя обменивать
+// участок группы, пока в ней стоят дома — сначала продать всю застройку).
+export function groupHasHouses(props: PropsMap, group: string): boolean {
+  return groupTiles(group).some((t) => (props[t.id]?.houses ?? 0) > 0);
+}
+
+// Можно ли включить клетку в обмен от имени ownerId: он ею владеет, это
+// покупаемая клетка, и в её группе нет застройки. Заложенные — можно (переходят как есть).
+export function canTradeProperty(props: PropsMap, tileId: number, ownerId: string): boolean {
+  const tile = tileAt(tileId);
+  if (!isPurchasable(tile)) return false;
+  if (props[tileId]?.ownerId !== ownerId) return false;
+  if (tile.type === TileType.Property && tile.group && groupHasHouses(props, tile.group)) return false;
+  return true;
+}
+
+export interface TradeTerms {
+  fromId: string; toId: string;
+  offerProps: number[]; requestProps: number[];
+  offerMoney: number; requestMoney: number;
+  offerCards: number; requestCards: number;
+}
+
+// Полная проверка условий обмена (используется и при предложении, и при принятии —
+// состояние могло измениться, поэтому валидируем повторно перед исполнением).
+export function validateTrade(
+  t: TradeTerms, props: PropsMap,
+  fromMoney: number, toMoney: number, fromCards: number, toCards: number
+): boolean {
+  if (!t.fromId || !t.toId || t.fromId === t.toId) return false;
+  const nums = [t.offerMoney, t.requestMoney, t.offerCards, t.requestCards];
+  if (nums.some((n) => !Number.isInteger(n) || n < 0)) return false;
+  // пустой обмен (ничего не отдаётся и не просится) — бессмыслен
+  if (!t.offerProps.length && !t.requestProps.length &&
+      !t.offerMoney && !t.requestMoney && !t.offerCards && !t.requestCards) return false;
+  // клетки не должны повторяться / пересекаться между сторонами
+  const all = [...t.offerProps, ...t.requestProps];
+  if (new Set(all).size !== all.length) return false;
+  if (t.offerProps.some((id) => !canTradeProperty(props, id, t.fromId))) return false;
+  if (t.requestProps.some((id) => !canTradeProperty(props, id, t.toId))) return false;
+  if (fromMoney < t.offerMoney || toMoney < t.requestMoney) return false;
+  if (fromCards < t.offerCards || toCards < t.requestCards) return false;
+  return true;
+}
+
 // Исход броска кубиков в тюрьме:
 //  escape     — выпал дубль, выходим и ходим на этот бросок (без доп. хода);
 //  forced_pay — исчерпаны попытки (это N-я неудача), выход принудительный со штрафом;
