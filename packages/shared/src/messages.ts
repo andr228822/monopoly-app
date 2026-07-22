@@ -18,6 +18,10 @@ export const ClientMsg = {
   DeclineBuy: "decline_buy",
   PayJailFine: "pay_jail_fine",   // выйти из тюрьмы за штраф (потом бросить и ходить)
   UseJailCard: "use_jail_card",   // выйти из тюрьмы картой «выход бесплатно»
+  MortgageProperty: "mortgage",   // заложить свой участок (50% цены)
+  Unmortgage: "unmortgage",       // выкупить залог (55% цены)
+  BuildHouse: "build_house",      // построить дом/отель
+  SellHouse: "sell_house",        // продать дом/отель (половина цены)
 } as const;
 
 export const ServerMsg = {

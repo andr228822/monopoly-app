@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { canStart, pushRateWindow, computeMove, isPurchasable, rentFor, nextAlivePlayerId, resolveWinner, jailRollOutcome, moveToTile } from "./logic";
-import { tileAt, GAME_CONFIG, drawCard, CHANCE_DECK, CHEST_DECK, MONEY_SCALE } from "@monopoly/shared";
+import { canStart, pushRateWindow, computeMove, isPurchasable, rentFor, nextAlivePlayerId, resolveWinner, jailRollOutcome, moveToTile, mortgageValue, unmortgageCost, canBuildHouse, canSellHouse } from "./logic";
+import { tileAt, GAME_CONFIG, drawCard, CHANCE_DECK, CHEST_DECK, MONEY_SCALE, RAILROAD_RENT } from "@monopoly/shared";
 
 describe("canStart", () => {
   it("меньше минимума игроков — нельзя", () => {
@@ -55,11 +55,68 @@ describe("isPurchasable / rentFor", () => {
     assert.equal(isPurchasable(tileAt(0)), false);  // go
     assert.equal(isPurchasable(tileAt(4)), false);  // tax
   });
-  it("аренда недвижимости — фикс. ставка клетки", () => {
-    assert.equal(rentFor(tileAt(1), 1, 1), tileAt(1).rent);
+});
+
+describe("rentFor (Фаза 3)", () => {
+  const own = (id: number, ownerId: string, houses = 0, mortgaged = false) =>
+    ({ [id]: { ownerId, houses, mortgaged } });
+
+  it("участок без монополии — базовая аренда rents[0]", () => {
+    const props = own(1, "x"); // brown = {1,3}, владеем только 1 → не монополия
+    assert.equal(rentFor(tileAt(1), props, 1, 1), tileAt(1).rents![0]);
   });
-  it("аренда коммунальной — по сумме кубиков", () => {
-    assert.equal(rentFor(tileAt(12), 3, 4), 7 * GAME_CONFIG.utilityRentPerDice);
+  it("монополия без домов — аренда ×2", () => {
+    const props = { ...own(1, "x"), ...own(3, "x") };
+    assert.equal(rentFor(tileAt(1), props, 1, 1), tileAt(1).rents![0] * 2);
+  });
+  it("с домами — аренда rents[houses]", () => {
+    const props = { ...own(1, "x", 3), ...own(3, "x") };
+    assert.equal(rentFor(tileAt(1), props, 1, 1), tileAt(1).rents![3]);
+  });
+  it("заложенная клетка — аренды нет", () => {
+    const props = { ...own(1, "x", 0, true), ...own(3, "x") };
+    assert.equal(rentFor(tileAt(1), props, 1, 1), 0);
+  });
+  it("ж/д — по числу вокзалов у владельца", () => {
+    assert.equal(rentFor(tileAt(5), own(5, "x"), 1, 1), RAILROAD_RENT[0]);
+    const two = { ...own(5, "x"), ...own(15, "x") };
+    assert.equal(rentFor(tileAt(5), two, 1, 1), RAILROAD_RENT[1]);
+  });
+  it("коммунальная — сумма кубиков ×4 (одна) или ×10 (обе)", () => {
+    assert.equal(rentFor(tileAt(12), own(12, "x"), 3, 4), 7 * 4 * MONEY_SCALE);
+    const both = { ...own(12, "x"), ...own(28, "x") };
+    assert.equal(rentFor(tileAt(12), both, 3, 4), 7 * 10 * MONEY_SCALE);
+  });
+});
+
+describe("ипотека и застройка (Фаза 3)", () => {
+  const own = (id: number, ownerId: string, houses = 0, mortgaged = false) =>
+    ({ [id]: { ownerId, houses, mortgaged } });
+  const brown = (a: number, b: number, ma = false, mb = false) =>
+    ({ ...own(1, "x", a, ma), ...own(3, "x", b, mb) }); // группа brown = {1,3}
+
+  it("залог = 50% цены, выкуп = 55%", () => {
+    assert.equal(mortgageValue(tileAt(1).price!), tileAt(1).price! / 2);
+    assert.equal(unmortgageCost(tileAt(1).price!), Math.round(tileAt(1).price! * 0.55));
+  });
+
+  it("строить нельзя без монополии", () => {
+    assert.equal(canBuildHouse(own(1, "x"), 1, "x"), false); // владеем только 1 из brown
+  });
+  it("монополия, равномерно — строить можно", () => {
+    assert.equal(canBuildHouse(brown(0, 0), 1, "x"), true);
+  });
+  it("равномерность: нельзя обгонять минимум группы", () => {
+    assert.equal(canBuildHouse(brown(1, 0), 1, "x"), false); // на 1 уже дом, у 3 — нет
+    assert.equal(canBuildHouse(brown(1, 0), 3, "x"), true);  // достраиваем отстающую
+  });
+  it("заложенная клетка в группе блокирует стройку", () => {
+    assert.equal(canBuildHouse(brown(0, 0, false, true), 1, "x"), false);
+  });
+  it("продавать можно с самой застроенной клетки группы", () => {
+    assert.equal(canSellHouse(brown(2, 1), 1, "x"), true);  // у 1 больше
+    assert.equal(canSellHouse(brown(2, 1), 3, "x"), false); // с отстающей нельзя
+    assert.equal(canSellHouse(brown(0, 0), 1, "x"), false); // нечего продавать
   });
 });
 

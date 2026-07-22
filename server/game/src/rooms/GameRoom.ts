@@ -7,6 +7,7 @@ import {
 import {
   canStart, pushRateWindow, computeMove, isPurchasable, rentFor, isDouble,
   jailRollOutcome, moveToTile, nextAlivePlayerId, resolveWinner, tileAt,
+  mortgageValue, unmortgageCost, canBuildHouse, canSellHouse, type PropsMap,
 } from "../logic";
 
 interface CreateOptions {
@@ -79,6 +80,23 @@ export class GameRoom extends Room<GameState> {
     this.onMessage(ClientMsg.UseJailCard, (client) => {
       if (this.rateLimited(client)) return;
       this.handleUseJailCard(client);
+    });
+
+    this.onMessage(ClientMsg.MortgageProperty, (client, msg: { tileId?: number }) => {
+      if (this.rateLimited(client)) return;
+      this.handleMortgage(client, Number(msg?.tileId));
+    });
+    this.onMessage(ClientMsg.Unmortgage, (client, msg: { tileId?: number }) => {
+      if (this.rateLimited(client)) return;
+      this.handleUnmortgage(client, Number(msg?.tileId));
+    });
+    this.onMessage(ClientMsg.BuildHouse, (client, msg: { tileId?: number }) => {
+      if (this.rateLimited(client)) return;
+      this.handleBuildHouse(client, Number(msg?.tileId));
+    });
+    this.onMessage(ClientMsg.SellHouse, (client, msg: { tileId?: number }) => {
+      if (this.rateLimited(client)) return;
+      this.handleSellHouse(client, Number(msg?.tileId));
     });
   }
 
@@ -281,6 +299,15 @@ export class GameRoom extends Room<GameState> {
     this.movePlayer(p, from, GAME_CONFIG.jailTileId, false, true);
   }
 
+  // Срез владений для чистых функций расчёта аренды (logic.ts).
+  private propsView(): PropsMap {
+    const m: PropsMap = {};
+    this.state.properties.forEach((prop, key) => {
+      m[Number(key)] = { ownerId: prop.ownerId, houses: prop.houses, mortgaged: prop.mortgaged };
+    });
+    return m;
+  }
+
   private resolveTile(p: Player, d1: number, d2: number) {
     const tile = tileAt(p.position);
     if (isPurchasable(tile)) {
@@ -290,7 +317,7 @@ export class GameRoom extends Room<GameState> {
         if (p.money >= (tile.price || 0)) this.state.awaitingBuyTileId = tile.id;
       } else if (ownerId !== p.id) {
         const owner = this.state.players.get(ownerId);
-        if (owner && !owner.bankrupt) this.payRent(p, owner, rentFor(tile, d1, d2), tile.id);
+        if (owner && !owner.bankrupt) this.payRent(p, owner, rentFor(tile, this.propsView(), d1, d2), tile.id);
       }
     } else if (tile.type === TileType.Tax) {
       this.chargeMoney(p, tile.tax || 0);
@@ -376,7 +403,7 @@ export class GameRoom extends Room<GameState> {
   private bankruptPlayer(p: Player) {
     p.bankrupt = true;
     for (const prop of this.state.properties.values()) {
-      if (prop.ownerId === p.id) prop.ownerId = ""; // имущество возвращается банку
+      if (prop.ownerId === p.id) { prop.ownerId = ""; prop.houses = 0; prop.mortgaged = false; } // банку
     }
     this.broadcast(ServerMsg.PlayerBankrupt, { playerId: p.id });
 
@@ -441,6 +468,58 @@ export class GameRoom extends Room<GameState> {
     p.getOutCards--;
     p.inJail = false;
     p.jailTurns = 0;
+  }
+
+  // ── Ипотека и застройка (только в свой ход) ──
+  private myTurnPlayer(client: Client): Player | null {
+    if (this.state.phase !== Phase.Playing) return null;
+    if (client.sessionId !== this.state.currentPlayerId) return null;
+    const p = this.state.players.get(client.sessionId);
+    return p && !p.bankrupt ? p : null;
+  }
+
+  private handleMortgage(client: Client, tileId: number) {
+    const p = this.myTurnPlayer(client);
+    if (!p) return;
+    const prop = this.state.properties.get(String(tileId));
+    const tile = tileAt(tileId);
+    if (!prop || prop.ownerId !== p.id || prop.mortgaged || prop.houses > 0) return;
+    prop.mortgaged = true;
+    p.money += mortgageValue(tile.price || 0);
+  }
+
+  private handleUnmortgage(client: Client, tileId: number) {
+    const p = this.myTurnPlayer(client);
+    if (!p) return;
+    const prop = this.state.properties.get(String(tileId));
+    const tile = tileAt(tileId);
+    if (!prop || prop.ownerId !== p.id || !prop.mortgaged) return;
+    const cost = unmortgageCost(tile.price || 0);
+    if (p.money < cost) return;
+    p.money -= cost;
+    prop.mortgaged = false;
+  }
+
+  private handleBuildHouse(client: Client, tileId: number) {
+    const p = this.myTurnPlayer(client);
+    if (!p) return;
+    if (!canBuildHouse(this.propsView(), tileId, p.id)) return;
+    const cost = tileAt(tileId).houseCost || 0;
+    if (p.money < cost) return;
+    const prop = this.state.properties.get(String(tileId));
+    if (!prop) return;
+    p.money -= cost;
+    prop.houses += 1;
+  }
+
+  private handleSellHouse(client: Client, tileId: number) {
+    const p = this.myTurnPlayer(client);
+    if (!p) return;
+    if (!canSellHouse(this.propsView(), tileId, p.id)) return;
+    const prop = this.state.properties.get(String(tileId));
+    if (!prop) return;
+    prop.houses -= 1;
+    p.money += Math.floor((tileAt(tileId).houseCost || 0) / 2); // продажа за полцены
   }
 
   // Клетка разрешена (и решение о покупке, если было, принято) — либо ещё один

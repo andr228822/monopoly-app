@@ -53,6 +53,10 @@ export function App() {
           onDecline={game.declineBuy}
           onPayJailFine={game.payJailFine}
           onUseJailCard={game.useJailCard}
+          onMortgage={game.mortgage}
+          onUnmortgage={game.unmortgage}
+          onBuildHouse={game.buildHouse}
+          onSellHouse={game.sellHouse}
         />
       </div>
     );

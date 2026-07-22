@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { BOARD, TileType, GAME_CONFIG } from "@monopoly/shared";
+import { BOARD, TileType, GAME_CONFIG, groupTiles } from "@monopoly/shared";
+import type { PropView } from "./net/useGame";
 
 const JAIL_FINE = GAME_CONFIG.jailFine;
+
+// Владею ли я всей цветовой группой этого участка (для стройки на клиенте).
+function ownsGroup(properties: Record<number, PropView>, group: string, myId: string): boolean {
+  const tiles = groupTiles(group);
+  return tiles.length > 0 && tiles.every((t) => properties[t.id]?.ownerId === myId);
+}
 import type { PlayerView, MoveEvent, RollEvent, TurnStartEvent, CardEvent } from "./net/useGame";
 import { gridPos } from "./boardLayout";
 import { Tokens } from "./Tokens";
@@ -42,9 +49,10 @@ export function Board({
   players, properties, currentPlayerId, mySessionId,
   dice1, dice2, awaitingBuyTileId, phase, winnerId, lastRoll, lastMove, lastTurnStart, lastCard,
   onRoll, onBuy, onDecline, onPayJailFine, onUseJailCard,
+  onMortgage, onUnmortgage, onBuildHouse, onSellHouse,
 }: {
   players: PlayerView[];
-  properties: Record<number, string>;
+  properties: Record<number, PropView>;
   currentPlayerId: string;
   mySessionId: string;
   dice1: number;
@@ -61,6 +69,10 @@ export function Board({
   onDecline: () => void;
   onPayJailFine: () => void;
   onUseJailCard: () => void;
+  onMortgage: (tileId: number) => void;
+  onUnmortgage: (tileId: number) => void;
+  onBuildHouse: (tileId: number) => void;
+  onSellHouse: (tileId: number) => void;
 }) {
   const colorOf = (playerId: string) => PLAYER_COLORS[players.findIndex((p) => p.id === playerId) % PLAYER_COLORS.length];
   const isMyTurn = currentPlayerId === mySessionId;
@@ -110,7 +122,9 @@ export function Board({
     <div className="board">
       {BOARD.map((tile) => {
         const { col, row } = gridPos(tile.id);
-        const ownerId = properties[tile.id];
+        const prop = properties[tile.id];
+        const ownerId = prop?.ownerId;
+        const houses = prop?.houses ?? 0;
         return (
           <div
             key={tile.id}
@@ -120,12 +134,15 @@ export function Board({
               gridRow: row,
               borderColor: ownerId ? colorOf(ownerId) : undefined,
               borderWidth: ownerId ? 3 : 1,
+              opacity: prop?.mortgaged ? 0.55 : 1,
             }}
           >
             {tile.group && <div className="tileGroup" style={{ background: GROUP_COLORS[tile.group] }} />}
             <div className="tileName">{tile.name}</div>
             {tile.price ? <div className="tilePrice">${fmt(tile.price)}</div> : null}
             {tile.tax ? <div className="tilePrice">${fmt(tile.tax)}</div> : null}
+            {houses > 0 && <div className="tileHouses">{houses === 5 ? "🏨" : "🏠".repeat(houses)}</div>}
+            {prop?.mortgaged && <div className="tileMortgaged">💰 залог</div>}
           </div>
         );
       })}
@@ -193,6 +210,35 @@ export function Board({
             </li>
           ))}
         </ul>
+
+        {isMyTurn && phase === "playing" && (
+          <div className="manage">
+            <div className="manageTitle">Мои владения (управление в свой ход)</div>
+            {BOARD.filter((t) => properties[t.id]?.ownerId === mySessionId).map((t) => {
+              const prop = properties[t.id]!;
+              const isProp = t.type === TileType.Property;
+              const canBuild = isProp && !prop.mortgaged && prop.houses < 5 &&
+                ownsGroup(properties, t.group!, mySessionId) &&
+                !groupTiles(t.group!).some((g) => properties[g.id]?.mortgaged);
+              return (
+                <div key={t.id} className="manageRow">
+                  <span className="manageName" style={{ borderColor: t.group ? GROUP_COLORS[t.group] : "#2c6b2c" }}>
+                    {t.name}{prop.houses === 5 ? " 🏨" : prop.houses > 0 ? " " + "🏠".repeat(prop.houses) : ""}
+                  </span>
+                  {isProp && canBuild && <button onClick={() => onBuildHouse(t.id)}>🏠 +${fmt(t.houseCost!)}</button>}
+                  {isProp && prop.houses > 0 && <button onClick={() => onSellHouse(t.id)}>🏠 −</button>}
+                  {!prop.mortgaged && prop.houses === 0 && (
+                    <button onClick={() => onMortgage(t.id)}>Заложить</button>
+                  )}
+                  {prop.mortgaged && <button onClick={() => onUnmortgage(t.id)}>Выкупить</button>}
+                </div>
+              );
+            })}
+            {!BOARD.some((t) => properties[t.id]?.ownerId === mySessionId) && (
+              <div className="note">Пока нет купленных участков</div>
+            )}
+          </div>
+        )}
       </div>
 
       {card && (

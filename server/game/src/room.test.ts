@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { boot, ColyseusTestServer } from "@colyseus/testing";
 import { ClientMsg, GAME_CONFIG, tileAt } from "@monopoly/shared";
 import { GameRoom } from "./rooms/GameRoom";
+import { PropertyState } from "./schema/GameState";
+import { mortgageValue } from "./logic";
 
 const RAILROAD5_PRICE = tileAt(5).price!; // цена «Северного вокзала» (клетка 5)
 
@@ -278,6 +280,44 @@ describe("GameRoom (интеграция)", () => {
     await settle(room);
     assert.equal(pa.inJail, false);
     assert.equal(pa.money, before - GAME_CONFIG.jailFine);
+    await a.leave(); await b.leave();
+  });
+
+  // Выдать игроку клетки во владение (для тестов застройки/ипотеки).
+  function grant(room: any, ownerId: string, ids: number[]) {
+    for (const id of ids) {
+      const prop = new PropertyState();
+      prop.ownerId = ownerId;
+      room.state.properties.set(String(id), prop);
+    }
+  }
+
+  it("строительство дома: нужна монополия, списание houseCost, +1 дом", async () => {
+    const { room, a, b } = await startedGame();
+    const pa = room.state.players.get(a.sessionId);
+
+    a.send(ClientMsg.BuildHouse, { tileId: 1 }); // без владения — игнор
+    await settle(room);
+    assert.equal(room.state.properties.get("1"), undefined);
+
+    grant(room, a.sessionId, [1, 3]); // вся коричневая группа
+    const before = pa.money;
+    a.send(ClientMsg.BuildHouse, { tileId: 1 });
+    await settle(room);
+    assert.equal(room.state.properties.get("1").houses, 1);
+    assert.equal(pa.money, before - tileAt(1).houseCost!);
+    await a.leave(); await b.leave();
+  });
+
+  it("ипотека: залог даёт 50% цены и помечает клетку", async () => {
+    const { room, a, b } = await startedGame();
+    const pa = room.state.players.get(a.sessionId);
+    grant(room, a.sessionId, [5]); // Северный вокзал
+    const before = pa.money;
+    a.send(ClientMsg.MortgageProperty, { tileId: 5 });
+    await settle(room);
+    assert.equal(room.state.properties.get("5").mortgaged, true);
+    assert.equal(pa.money, before + mortgageValue(tileAt(5).price!));
     await a.leave(); await b.leave();
   });
 

@@ -57,6 +57,39 @@ li { padding: 6px 0; border-bottom: 1px solid #2c6b2c; }
 .tileGroup { height: 6px; border-radius: 2px; margin-bottom: 2px; }
 .tileName { flex: 1; line-height: 1.2; }
 .tilePrice { color: #c8f250; font-weight: 700; }
+.tileHouses { font-size: 12px; letter-spacing: -2px; }
+.tileMortgaged { font-size: 9px; color: #f4a261; font-weight: 700; }
+
+/* ── Панель управления недвижимостью ── */
+.manage {
+  margin-top: 14px;
+  width: 100%;
+  max-width: 340px;
+  border-top: 1px solid #2c6b2c;
+  padding-top: 10px;
+}
+.manageTitle { font-size: 12px; color: #9db89a; margin-bottom: 8px; text-align: center; }
+.manageRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.manageName {
+  flex: 1;
+  min-width: 120px;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 6px;
+  border-left: 4px solid;
+  border-radius: 3px;
+  background: #14401a;
+}
+.manageRow button {
+  font-size: 12px;
+  padding: 5px 8px;
+}
 
 /* Фишки — оверлей поверх доски, двигаются пошагово (см. Tokens.tsx). */
 .token {

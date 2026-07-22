@@ -16,6 +16,8 @@ export interface PlayerView {
   getOutCards: number;
 }
 
+export interface PropView { ownerId: string; houses: number; mortgaged: boolean }
+
 export interface GameSnapshot {
   phase: string;
   lobbyName: string;
@@ -27,7 +29,7 @@ export interface GameSnapshot {
   dice1: number;
   dice2: number;
   awaitingBuyTileId: number;
-  properties: Record<number, string>; // tileId -> ownerId
+  properties: Record<number, PropView>; // tileId -> владение (владелец/дома/залог)
   winnerId: string;
 }
 
@@ -74,9 +76,9 @@ export function useGame() {
         inJail: p.inJail ?? false, getOutCards: p.getOutCards ?? 0,
       });
     });
-    const properties: Record<number, string> = {};
+    const properties: Record<number, PropView> = {};
     state.properties?.forEach((prop: any, tileId: string) => {
-      if (prop.ownerId) properties[Number(tileId)] = prop.ownerId;
+      if (prop.ownerId) properties[Number(tileId)] = { ownerId: prop.ownerId, houses: prop.houses ?? 0, mortgaged: prop.mortgaged ?? false };
     });
     setSnapshot({
       phase: state.phase,
@@ -168,6 +170,18 @@ export function useGame() {
   const useJailCard = useCallback(() => {
     roomRef.current?.send(ClientMsg.UseJailCard);
   }, []);
+  const mortgage = useCallback((tileId: number) => {
+    roomRef.current?.send(ClientMsg.MortgageProperty, { tileId });
+  }, []);
+  const unmortgage = useCallback((tileId: number) => {
+    roomRef.current?.send(ClientMsg.Unmortgage, { tileId });
+  }, []);
+  const buildHouse = useCallback((tileId: number) => {
+    roomRef.current?.send(ClientMsg.BuildHouse, { tileId });
+  }, []);
+  const sellHouse = useCallback((tileId: number) => {
+    roomRef.current?.send(ClientMsg.SellHouse, { tileId });
+  }, []);
 
   const leave = useCallback(() => {
     try { roomRef.current?.leave(); } catch {}
@@ -182,6 +196,7 @@ export function useGame() {
     status, error, snapshot, mySessionId, lastRoll, lastMove, lastTurnStart, lastCard,
     createGame, joinByCode, setReady, startGame,
     rollDice, buyProperty, declineBuy, payJailFine, useJailCard,
+    mortgage, unmortgage, buildHouse, sellHouse,
     leave,
   };
 }

@@ -1,5 +1,7 @@
 // Чистая игровая логика (без Colyseus/сети) — единая точка для юнит-тестов.
-import { GAME_CONFIG, TileType, tileAt, type Tile } from "@monopoly/shared";
+import {
+  GAME_CONFIG, TileType, tileAt, groupTiles, BOARD, RAILROAD_RENT, UTILITY_MULT, MONEY_SCALE, type Tile,
+} from "@monopoly/shared";
 
 export interface PlayerLike {
   id: string;
@@ -41,11 +43,42 @@ export function isPurchasable(tile: Tile): boolean {
   return tile.type === TileType.Property || tile.type === TileType.Railroad || tile.type === TileType.Utility;
 }
 
-// Базовая аренда (без домов/монополии/владения всеми ж.д. — Фаза 3).
-// Коммунальные — по сумме кубиков текущего хода, остальное — фикс. ставка клетки.
-export function rentFor(tile: Tile, d1: number, d2: number): number {
-  if (tile.type === TileType.Utility) return (d1 + d2) * GAME_CONFIG.utilityRentPerDice;
-  return tile.rent ?? 0;
+// Владения (срез синк-состояния): tileId -> кто владеет, дома, заложено.
+export interface PropView { ownerId: string; houses: number; mortgaged: boolean }
+export type PropsMap = Record<number, PropView | undefined>;
+
+// Владеет ли ownerId ВСЕЙ цветовой группой (монополия).
+export function ownsWholeGroup(props: PropsMap, group: string, ownerId: string): boolean {
+  const tiles = groupTiles(group);
+  return tiles.length > 0 && tiles.every((t) => props[t.id]?.ownerId === ownerId);
+}
+
+// Сколько клеток заданного типа во владении ownerId (для ж/д и коммунальных).
+export function countOwnedOfType(props: PropsMap, type: TileType, ownerId: string): number {
+  return BOARD.filter((t) => t.type === type && props[t.id]?.ownerId === ownerId).length;
+}
+
+// Аренда с учётом застройки/монополии/числа ж/д и коммунальных.
+// Заложенная клетка аренду не приносит. Коммунальные — по сумме кубиков.
+export function rentFor(tile: Tile, props: PropsMap, d1: number, d2: number): number {
+  const prop = props[tile.id];
+  if (!prop || !prop.ownerId || prop.mortgaged) return 0;
+
+  if (tile.type === TileType.Property) {
+    const rents = tile.rents || [0];
+    if (prop.houses > 0) return rents[Math.min(prop.houses, 5)] ?? 0;
+    // без домов: монополия удваивает базовую аренду
+    return ownsWholeGroup(props, tile.group!, prop.ownerId) ? (rents[0] ?? 0) * 2 : rents[0] ?? 0;
+  }
+  if (tile.type === TileType.Railroad) {
+    const n = countOwnedOfType(props, TileType.Railroad, prop.ownerId);
+    return RAILROAD_RENT[Math.max(0, Math.min(n, 4) - 1)] ?? 0;
+  }
+  if (tile.type === TileType.Utility) {
+    const n = countOwnedOfType(props, TileType.Utility, prop.ownerId);
+    return (d1 + d2) * (n >= 2 ? UTILITY_MULT.both : UTILITY_MULT.one) * MONEY_SCALE;
+  }
+  return 0;
 }
 
 // Следующий живой (не банкрот) игрок по кругу от текущего в заданном порядке ходов.
@@ -66,6 +99,43 @@ export function nextAlivePlayerId(
 // Дубль — оба кубика показали одно и то же значение (даёт лишний бросок).
 export function isDouble(d1: number, d2: number): boolean {
   return d1 === d2;
+}
+
+// ── Ипотека и застройка (Фаза 3) ──
+export function mortgageValue(price: number): number {
+  return Math.floor(price / 2);
+}
+export function unmortgageCost(price: number): number {
+  return Math.round(price * 0.55); // залог 50% + 10% процент
+}
+
+function housesInGroup(props: PropsMap, group: string): number[] {
+  return groupTiles(group).map((t) => (t.type === TileType.Property ? props[t.id]?.houses ?? 0 : 0));
+}
+
+// Можно ли построить дом/отель на этой клетке (равномерная застройка).
+export function canBuildHouse(props: PropsMap, tileId: number, ownerId: string): boolean {
+  const tile = tileAt(tileId);
+  if (tile.type !== TileType.Property || !tile.group) return false;
+  if (!ownsWholeGroup(props, tile.group, ownerId)) return false;
+  // ни одна клетка группы не должна быть заложена
+  if (groupTiles(tile.group).some((t) => props[t.id]?.mortgaged)) return false;
+  const cur = props[tileId]?.houses ?? 0;
+  if (cur >= 5) return false; // уже отель
+  // равномерность: строим только если у этой клетки не больше домов, чем у минимальной в группе
+  const min = Math.min(...housesInGroup(props, tile.group));
+  return cur === min;
+}
+
+// Можно ли продать дом/отель с этой клетки (равномерность в обратную сторону).
+export function canSellHouse(props: PropsMap, tileId: number, ownerId: string): boolean {
+  const tile = tileAt(tileId);
+  if (tile.type !== TileType.Property || !tile.group) return false;
+  if (props[tileId]?.ownerId !== ownerId) return false;
+  const cur = props[tileId]?.houses ?? 0;
+  if (cur <= 0) return false;
+  const max = Math.max(...housesInGroup(props, tile.group));
+  return cur === max;
 }
 
 // Исход броска кубиков в тюрьме:

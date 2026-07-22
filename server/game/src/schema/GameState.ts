@@ -21,7 +21,9 @@ export class Player extends Schema {
 
 // Владение клеткой недвижимости/ж.д./коммунальной. Ключ карты — id клетки (строкой).
 export class PropertyState extends Schema {
-  @type("string") ownerId = ""; // "" = банк (не куплено)
+  @type("string") ownerId = "";      // "" = банк (не куплено)
+  @type("uint8") houses = 0;         // 0-4 дома, 5 = отель (только для участков)
+  @type("boolean") mortgaged = false; // заложено — аренда не берётся
 }
 
 export class GameState extends Schema {

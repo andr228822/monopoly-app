@@ -1,5 +1,5 @@
 // Данные доски — 40 клеток по кругу. Оригинальные названия (без привязки
-// к реальным брендам), классическая раскладка цветовых групп/цен/ж.д./коммунальных.
+// к реальным брендам), классическая раскладка и таблицы аренды.
 export const TileType = {
   Go: "go",
   Property: "property",
@@ -18,67 +18,82 @@ export interface Tile {
   id: number;
   type: TileType;
   name: string;
-  group?: string;   // цветовая группа (для property)
-  price?: number;
-  rent?: number;     // базовая аренда без домов (Фаза 1/2), для ж.д./коммунальных — тоже база
-  tax?: number;      // сумма налога (Tax)
+  group?: string;      // цветовая группа (для property)
+  price?: number;      // цена покупки (property/railroad/utility)
+  rents?: number[];    // [база, 1 дом, 2, 3, 4, отель] — только для property
+  houseCost?: number;  // цена одного дома/отеля — только для property
+  tax?: number;        // сумма налога (Tax)
 }
 
 // Множитель экономики: базовые числа ниже — классические, наружу отдаём ×MONEY_SCALE
 // (крупные «настоящие» суммы под стартовый капитал 2 млн). Пропорции сохраняются.
 export const MONEY_SCALE = 1000;
 
+// Аренда железной дороги по числу ж/д во владении (1..4). Коммунальные — множитель к сумме кубиков.
+export const RAILROAD_RENT = [25, 50, 100, 200].map((v) => v * MONEY_SCALE);
+export const UTILITY_MULT = { one: 4, both: 10 };
+
+// property: [name, group, price, rents(6), houseCost]; rr/util: price
+const P = (id: number, name: string, group: string, price: number, rents: number[], houseCost: number): Tile =>
+  ({ id, type: TileType.Property, name, group, price, rents, houseCost });
+
 const BOARD_BASE: Tile[] = [
   { id: 0, type: TileType.Go, name: "Старт" },
-  { id: 1, type: TileType.Property, name: "Лесная ул.", group: "brown", price: 60, rent: 2 },
+  P(1, "Лесная ул.", "brown", 60, [2, 10, 30, 90, 160, 250], 50),
   { id: 2, type: TileType.Chest, name: "Казна" },
-  { id: 3, type: TileType.Property, name: "Полевая ул.", group: "brown", price: 60, rent: 4 },
+  P(3, "Полевая ул.", "brown", 60, [4, 20, 60, 180, 320, 450], 50),
   { id: 4, type: TileType.Tax, name: "Подоходный налог", tax: 200 },
-  { id: 5, type: TileType.Railroad, name: "Северный вокзал", price: 200, rent: 25 },
-  { id: 6, type: TileType.Property, name: "Речная ул.", group: "lightblue", price: 100, rent: 6 },
+  { id: 5, type: TileType.Railroad, name: "Северный вокзал", price: 200 },
+  P(6, "Речная ул.", "lightblue", 100, [6, 30, 90, 270, 400, 550], 50),
   { id: 7, type: TileType.Chance, name: "Шанс" },
-  { id: 8, type: TileType.Property, name: "Озёрная ул.", group: "lightblue", price: 100, rent: 6 },
-  { id: 9, type: TileType.Property, name: "Морская наб.", group: "lightblue", price: 120, rent: 8 },
+  P(8, "Озёрная ул.", "lightblue", 100, [6, 30, 90, 270, 400, 550], 50),
+  P(9, "Морская наб.", "lightblue", 120, [8, 40, 100, 300, 450, 600], 50),
   { id: 10, type: TileType.Jail, name: "Тюрьма / Просто в гостях" },
-  { id: 11, type: TileType.Property, name: "Садовая ул.", group: "pink", price: 140, rent: 10 },
-  { id: 12, type: TileType.Utility, name: "Электростанция", price: 150, rent: 4 },
-  { id: 13, type: TileType.Property, name: "Цветочная ул.", group: "pink", price: 140, rent: 10 },
-  { id: 14, type: TileType.Property, name: "Парковая ул.", group: "pink", price: 160, rent: 12 },
-  { id: 15, type: TileType.Railroad, name: "Южный вокзал", price: 200, rent: 25 },
-  { id: 16, type: TileType.Property, name: "Заводская ул.", group: "orange", price: 180, rent: 14 },
+  P(11, "Садовая ул.", "pink", 140, [10, 50, 150, 450, 625, 750], 100),
+  { id: 12, type: TileType.Utility, name: "Электростанция", price: 150 },
+  P(13, "Цветочная ул.", "pink", 140, [10, 50, 150, 450, 625, 750], 100),
+  P(14, "Парковая ул.", "pink", 160, [12, 60, 180, 500, 700, 900], 100),
+  { id: 15, type: TileType.Railroad, name: "Южный вокзал", price: 200 },
+  P(16, "Заводская ул.", "orange", 180, [14, 70, 200, 550, 750, 950], 100),
   { id: 17, type: TileType.Chest, name: "Казна" },
-  { id: 18, type: TileType.Property, name: "Складская ул.", group: "orange", price: 180, rent: 14 },
-  { id: 19, type: TileType.Property, name: "Портовая ул.", group: "orange", price: 200, rent: 16 },
+  P(18, "Складская ул.", "orange", 180, [14, 70, 200, 550, 750, 950], 100),
+  P(19, "Портовая ул.", "orange", 200, [16, 80, 220, 600, 800, 1000], 100),
   { id: 20, type: TileType.FreeParking, name: "Бесплатная парковка" },
-  { id: 21, type: TileType.Property, name: "Театральная ул.", group: "red", price: 220, rent: 18 },
+  P(21, "Театральная ул.", "red", 220, [18, 90, 250, 700, 875, 1050], 150),
   { id: 22, type: TileType.Chance, name: "Шанс" },
-  { id: 23, type: TileType.Property, name: "Музейная ул.", group: "red", price: 220, rent: 18 },
-  { id: 24, type: TileType.Property, name: "Соборная пл.", group: "red", price: 240, rent: 20 },
-  { id: 25, type: TileType.Railroad, name: "Восточный вокзал", price: 200, rent: 25 },
-  { id: 26, type: TileType.Property, name: "Университетская ул.", group: "yellow", price: 260, rent: 22 },
-  { id: 27, type: TileType.Property, name: "Библиотечная ул.", group: "yellow", price: 260, rent: 22 },
-  { id: 28, type: TileType.Utility, name: "Водоканал", price: 150, rent: 4 },
-  { id: 29, type: TileType.Property, name: "Ратушная пл.", group: "yellow", price: 280, rent: 24 },
+  P(23, "Музейная ул.", "red", 220, [18, 90, 250, 700, 875, 1050], 150),
+  P(24, "Соборная пл.", "red", 240, [20, 100, 300, 750, 925, 1100], 150),
+  { id: 25, type: TileType.Railroad, name: "Восточный вокзал", price: 200 },
+  P(26, "Университетская ул.", "yellow", 260, [22, 110, 330, 800, 975, 1150], 150),
+  P(27, "Библиотечная ул.", "yellow", 260, [22, 110, 330, 800, 975, 1150], 150),
+  { id: 28, type: TileType.Utility, name: "Водоканал", price: 150 },
+  P(29, "Ратушная пл.", "yellow", 280, [24, 120, 360, 850, 1025, 1200], 150),
   { id: 30, type: TileType.GoToJail, name: "Иди в тюрьму" },
-  { id: 31, type: TileType.Property, name: "Банковская ул.", group: "green", price: 300, rent: 26 },
-  { id: 32, type: TileType.Property, name: "Биржевая ул.", group: "green", price: 300, rent: 26 },
+  P(31, "Банковская ул.", "green", 300, [26, 130, 390, 900, 1100, 1275], 200),
+  P(32, "Биржевая ул.", "green", 300, [26, 130, 390, 900, 1100, 1275], 200),
   { id: 33, type: TileType.Chest, name: "Казна" },
-  { id: 34, type: TileType.Property, name: "Дворцовая наб.", group: "green", price: 320, rent: 28 },
-  { id: 35, type: TileType.Railroad, name: "Западный вокзал", price: 200, rent: 25 },
+  P(34, "Дворцовая наб.", "green", 320, [28, 150, 450, 1000, 1200, 1400], 200),
+  { id: 35, type: TileType.Railroad, name: "Западный вокзал", price: 200 },
   { id: 36, type: TileType.Chance, name: "Шанс" },
-  { id: 37, type: TileType.Property, name: "Столичный пр.", group: "darkblue", price: 350, rent: 35 },
+  P(37, "Столичный пр.", "darkblue", 350, [35, 175, 500, 1100, 1300, 1500], 200),
   { id: 38, type: TileType.Tax, name: "Налог на роскошь", tax: 100 },
-  { id: 39, type: TileType.Property, name: "Императорская пл.", group: "darkblue", price: 400, rent: 50 },
+  P(39, "Императорская пл.", "darkblue", 400, [50, 200, 600, 1400, 1700, 2000], 200),
 ];
 
-const scale = (v?: number) => (v == null ? v : v * MONEY_SCALE);
+const s = (v?: number) => (v == null ? v : v * MONEY_SCALE);
 export const BOARD: Tile[] = BOARD_BASE.map((t) => ({
   ...t,
-  price: scale(t.price),
-  rent: scale(t.rent),
-  tax: scale(t.tax),
+  price: s(t.price),
+  tax: s(t.tax),
+  houseCost: s(t.houseCost),
+  rents: t.rents ? t.rents.map((r) => r * MONEY_SCALE) : undefined,
 }));
 
 export function tileAt(id: number): Tile {
   return BOARD[((id % 40) + 40) % 40];
+}
+
+// Все клетки одной цветовой группы (для проверки монополии/застройки).
+export function groupTiles(group: string): Tile[] {
+  return BOARD.filter((t) => t.group === group);
 }
