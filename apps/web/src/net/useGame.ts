@@ -14,6 +14,7 @@ export interface PlayerView {
   bankrupt: boolean;
   inJail: boolean;
   getOutCards: number;
+  isBot: boolean;
 }
 
 export interface PropView { ownerId: string; houses: number; mortgaged: boolean }
@@ -104,7 +105,7 @@ export function useGame() {
       players.push({
         id: p.id, name: p.name, avatar: p.avatar ?? "", ready: p.ready, connected: p.connected ?? true,
         money: p.money ?? 0, position: p.position ?? 0, bankrupt: p.bankrupt ?? false,
-        inJail: p.inJail ?? false, getOutCards: p.getOutCards ?? 0,
+        inJail: p.inJail ?? false, getOutCards: p.getOutCards ?? 0, isBot: p.isBot ?? false,
       });
     });
     const properties: Record<number, PropView> = {};
@@ -204,6 +205,12 @@ export function useGame() {
   const startGame = useCallback(() => {
     roomRef.current?.send(ClientMsg.StartGame);
   }, []);
+  const addBot = useCallback(() => {
+    roomRef.current?.send(ClientMsg.AddBot);
+  }, []);
+  const removeBot = useCallback((botId: string) => {
+    roomRef.current?.send(ClientMsg.RemoveBot, { botId });
+  }, []);
 
   const rollDice = useCallback(() => {
     roomRef.current?.send(ClientMsg.RollDice);
@@ -259,7 +266,7 @@ export function useGame() {
 
   return {
     status, error, snapshot, mySessionId, lastRoll, lastMove, lastTurnStart, lastCard, lastTrade,
-    createGame, joinByCode, setReady, startGame,
+    createGame, joinByCode, setReady, startGame, addBot, removeBot,
     rollDice, buyProperty, declineBuy, payJailFine, useJailCard,
     mortgage, unmortgage, buildHouse, sellHouse, auctionBid, auctionPass,
     proposeTrade, acceptTrade, declineTrade,

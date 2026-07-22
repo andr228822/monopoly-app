@@ -2,7 +2,7 @@ import { Room, Client } from "colyseus";
 import { GameState, Player, PropertyState } from "../schema/GameState";
 import {
   GAME_CONFIG, Phase, ClientMsg, ServerMsg, TileType,
-  CardEffect, drawCard, type Card,
+  CardEffect, drawCard, AUCTION_STEPS, type Card,
 } from "@monopoly/shared";
 import {
   canStart, pushRateWindow, computeMove, isPurchasable, rentFor, isDouble,
@@ -33,6 +33,8 @@ export class GameRoom extends Room<GameState> {
   private turnTimer?: any;
   private auctionTimer?: any;
   private tradeTimer?: any;
+  private botTimer?: any;
+  private botSeq = 0; // счётчик для генерации id/имён ботов
   private turnDoubles = 0; // подряд выпавших дублей у текущего игрока в этом ходу
   // Что делать после разрешения клетки (может ждать решения о покупке — см. afterResolve).
   private pendingResolution: "advance" | "reroll" | null = null;
@@ -58,6 +60,15 @@ export class GameRoom extends Room<GameState> {
     this.onMessage(ClientMsg.StartGame, (client) => {
       if (this.rateLimited(client)) return;
       this.tryStart(client);
+    });
+
+    this.onMessage(ClientMsg.AddBot, (client) => {
+      if (this.rateLimited(client)) return;
+      this.handleAddBot(client);
+    });
+    this.onMessage(ClientMsg.RemoveBot, (client, msg: { botId?: string }) => {
+      if (this.rateLimited(client)) return;
+      this.handleRemoveBot(client, String(msg?.botId || ""));
     });
 
     this.onMessage(ClientMsg.RollDice, (client) => {
@@ -198,6 +209,7 @@ export class GameRoom extends Room<GameState> {
 
   private setPhase(phase: Phase) {
     this.state.phase = phase;
+    if (phase !== Phase.Playing && this.botTimer) { this.botTimer.clear(); this.botTimer = undefined; }
     if (phase === Phase.Lobby) this.unlock();
     else this.lock();
     this.broadcast(ServerMsg.PhaseChanged, { phase });
@@ -222,7 +234,47 @@ export class GameRoom extends Room<GameState> {
     this.clock.setTimeout(() => this.beginRound(), GAME_CONFIG.countdownMs);
   }
 
+  // ── Боты в лобби (Фаза 5): хост добавляет/убирает ботов-соперников ──
+  private botCount(): number {
+    let n = 0;
+    this.state.players.forEach((p) => { if (p.isBot) n++; });
+    return n;
+  }
+
+  // Боты занимают слоты, но не клиентские подключения. Ограничиваем число живых
+  // подключений так, чтобы всего игроков (люди+боты) не превышало maxPlayers.
+  private updateBotCapacity() {
+    this.maxClients = Math.max(1, this.state.maxPlayers - this.botCount());
+  }
+
+  private handleAddBot(client: Client) {
+    if (client.sessionId !== this.state.hostId) return;
+    if (this.state.phase !== Phase.Lobby) return;
+    if (this.state.players.size >= this.state.maxPlayers) return;
+    this.botSeq++;
+    const b = new Player();
+    b.id = `bot_${this.botSeq}_${Math.random().toString(36).slice(2, 6)}`;
+    b.name = `Бот ${this.botSeq}`;
+    b.avatar = "🤖";
+    b.isBot = true;
+    b.ready = true;      // боты всегда готовы
+    b.connected = true;
+    this.state.players.set(b.id, b);
+    this.updateBotCapacity();
+    console.log(`[room ${this.roomId}] +бот ${b.name} (${this.state.players.size} в комнате)`);
+  }
+
+  private handleRemoveBot(client: Client, botId: string) {
+    if (client.sessionId !== this.state.hostId) return;
+    if (this.state.phase !== Phase.Lobby) return;
+    const b = this.state.players.get(botId);
+    if (!b || !b.isBot) return;
+    this.state.players.delete(botId);
+    this.updateBotCapacity();
+  }
+
   private beginRound() {
+    if (this.botTimer) { this.botTimer.clear(); this.botTimer = undefined; }
     this.turnOrder = [...this.state.players.keys()];
     this.state.properties.clear();
     for (const p of this.state.players.values()) {
@@ -253,6 +305,7 @@ export class GameRoom extends Room<GameState> {
     const deadline = Date.now() + this.turnMs;
     this.broadcast(ServerMsg.TurnStarted, { playerId: this.state.currentPlayerId, deadline });
     this.turnTimer = this.clock.setTimeout(() => this.handleTurnTimeout(), this.turnMs);
+    this.maybeDriveBot(); // если ходит бот — он сам разыграет ход
   }
 
   private handleTurnTimeout() {
@@ -262,20 +315,14 @@ export class GameRoom extends Room<GameState> {
     this.advanceTurn();
   }
 
-  private isMyTurnWithPendingBuy(client: Client): boolean {
-    return (
-      this.state.phase === Phase.Playing &&
-      client.sessionId === this.state.currentPlayerId &&
-      this.state.awaitingBuyTileId !== 255
-    );
-  }
+  private handleRollDice(client: Client) { this.doRoll(client.sessionId); }
 
-  private handleRollDice(client: Client) {
+  private doRoll(playerId: string) {
     if (this.state.phase !== Phase.Playing) return;
-    if (client.sessionId !== this.state.currentPlayerId) return;
+    if (playerId !== this.state.currentPlayerId) return;
     if (this.state.trade.fromId) return; // сначала заверши обмен
     if (this.state.awaitingBuyTileId !== 255) return; // сначала реши покупку
-    const p = this.state.players.get(client.sessionId);
+    const p = this.state.players.get(playerId);
     if (!p || p.bankrupt) return;
 
     const d1 = 1 + Math.floor(Math.random() * 6);
@@ -468,9 +515,12 @@ export class GameRoom extends Room<GameState> {
     }
   }
 
-  private handleBuyProperty(client: Client) {
-    if (!this.isMyTurnWithPendingBuy(client)) return;
-    const p = this.state.players.get(client.sessionId);
+  private handleBuyProperty(client: Client) { this.doBuy(client.sessionId); }
+
+  private doBuy(playerId: string) {
+    if (this.state.phase !== Phase.Playing || playerId !== this.state.currentPlayerId) return;
+    if (this.state.awaitingBuyTileId === 255) return;
+    const p = this.state.players.get(playerId);
     if (!p) return;
     const tile = tileAt(this.state.awaitingBuyTileId);
     const price = tile.price || 0;
@@ -487,8 +537,11 @@ export class GameRoom extends Room<GameState> {
     this.afterResolve(p);
   }
 
-  private handleDeclineBuy(client: Client) {
-    if (!this.isMyTurnWithPendingBuy(client)) return;
+  private handleDeclineBuy(client: Client) { this.doDecline(client.sessionId); }
+
+  private doDecline(playerId: string) {
+    if (this.state.phase !== Phase.Playing || playerId !== this.state.currentPlayerId) return;
+    if (this.state.awaitingBuyTileId === 255) return;
     const tileId = this.state.awaitingBuyTileId;
     this.state.awaitingBuyTileId = 255;
     this.startAuction(tileId); // отказавшийся тоже участвует в торгах
@@ -583,6 +636,7 @@ export class GameRoom extends Room<GameState> {
     for (const pl of this.state.players.values()) if (!pl.bankrupt) this.state.auctionBidders.push(pl.id);
     if (this.state.auctionBidders.length === 0) { this.finishAuction(); return; }
     this.resetAuctionTimer();
+    this.maybeDriveBot(); // боты-участники начнут делать ставки
     console.log(`[room ${this.roomId}] аукцион: клетка ${tileId}, участников ${this.state.auctionBidders.length}`);
   }
 
@@ -593,24 +647,30 @@ export class GameRoom extends Room<GameState> {
     this.auctionTimer = this.clock.setTimeout(() => this.finishAuction(), GAME_CONFIG.auctionMs);
   }
 
-  private handleAuctionBid(client: Client, amount: number) {
+  private handleAuctionBid(client: Client, amount: number) { this.doAuctionBid(client.sessionId, amount); }
+
+  private doAuctionBid(playerId: string, amount: number) {
     if (this.state.phase !== Phase.Playing || this.state.auctionTileId === 255) return;
-    const p = this.state.players.get(client.sessionId);
+    const p = this.state.players.get(playerId);
     if (!p || p.bankrupt) return;
     if (this.state.auctionBidders.indexOf(p.id) < 0) return; // уже вышел из торгов
     if (!Number.isFinite(amount) || amount <= this.state.auctionBid || amount > p.money) return;
     this.state.auctionBid = Math.floor(amount);
     this.state.auctionBidderId = p.id;
     this.resetAuctionTimer();
+    this.maybeDriveBot(); // дать ботам-участникам среагировать на новую ставку
   }
 
-  private handleAuctionPass(client: Client) {
+  private handleAuctionPass(client: Client) { this.doAuctionPass(client.sessionId); }
+
+  private doAuctionPass(playerId: string) {
     if (this.state.phase !== Phase.Playing || this.state.auctionTileId === 255) return;
-    const i = this.state.auctionBidders.indexOf(client.sessionId);
+    const i = this.state.auctionBidders.indexOf(playerId);
     if (i < 0) return;
     this.state.auctionBidders.splice(i, 1);
     // остался один участник (обычно лидер) или ноль — завершаем.
     if (this.state.auctionBidders.length <= 1) this.finishAuction();
+    else this.maybeDriveBot();
   }
 
   private finishAuction() {
@@ -696,19 +756,24 @@ export class GameRoom extends Room<GameState> {
     if (this.turnTimer) { this.turnTimer.clear(); this.turnTimer = undefined; } // таймер хода на паузу
     tr.deadline = Math.floor((Date.now() + GAME_CONFIG.tradeMs) / 1000);         // сек, не мс (uint32)
     this.tradeTimer = this.clock.setTimeout(() => this.resolveTrade(false), GAME_CONFIG.tradeMs);
+    this.maybeDriveBot(); // если получатель — бот, он решит по эвристике
     console.log(`[room ${this.roomId}] обмен: ${from.name} → ${to.name}`);
   }
 
-  private handleAcceptTrade(client: Client) {
+  private handleAcceptTrade(client: Client) { this.doAcceptTrade(client.sessionId); }
+
+  private doAcceptTrade(playerId: string) {
     const tr = this.state.trade;
-    if (!tr.fromId || client.sessionId !== tr.toId) return; // принимает только получатель
+    if (!tr.fromId || playerId !== tr.toId) return; // принимает только получатель
     this.resolveTrade(true);
   }
 
-  private handleDeclineTrade(client: Client) {
+  private handleDeclineTrade(client: Client) { this.doDeclineTrade(client.sessionId); }
+
+  private doDeclineTrade(playerId: string) {
     const tr = this.state.trade;
     if (!tr.fromId) return;
-    if (client.sessionId !== tr.toId && client.sessionId !== tr.fromId) return; // отклонить/отменить
+    if (playerId !== tr.toId && playerId !== tr.fromId) return; // отклонить/отменить
     this.resolveTrade(false);
   }
 
@@ -759,6 +824,79 @@ export class GameRoom extends Room<GameState> {
     tr.offerCards = 0;
     tr.requestCards = 0;
     tr.deadline = 0;
+  }
+
+  // ── Боты-соперники (Фаза 5): сервер сам разыгрывает действия бота ──
+  private isBot(id: string): boolean {
+    return !!this.state.players.get(id)?.isBot;
+  }
+
+  // Определяет, требуется ли сейчас действие бота, и планирует его с задержкой,
+  // чтобы люди успевали видеть ход. После действия цепочка продолжается.
+  private maybeDriveBot() {
+    if (this.botTimer) { this.botTimer.clear(); this.botTimer = undefined; }
+    if (this.state.phase !== Phase.Playing) return;
+    const action = this.pickBotAction();
+    if (!action) return;
+    this.botTimer = this.clock.setTimeout(() => {
+      this.botTimer = undefined;
+      if (this.state.phase !== Phase.Playing) return;
+      action();
+      this.maybeDriveBot(); // следующий шаг (докупка / повторный бросок на дубле / след. ставка)
+    }, GAME_CONFIG.botDelayMs);
+  }
+
+  private pickBotAction(): (() => void) | null {
+    const s = this.state;
+    // Обмен: получатель-бот решает по эвристике ценности.
+    if (s.trade.fromId && this.isBot(s.trade.toId)) {
+      const id = s.trade.toId;
+      return () => this.botResolveTrade(id);
+    }
+    // Аукцион: очередной бот-участник (не текущий лидер) делает ставку/пас.
+    if (s.auctionTileId !== 255) {
+      const id = [...s.auctionBidders].find((x) => this.isBot(x) && x !== s.auctionBidderId);
+      return id ? () => this.botAuction(id) : null;
+    }
+    // Ход бота: решение о покупке, либо бросок кубиков.
+    const cur = s.currentPlayerId;
+    if (!this.isBot(cur)) return null;
+    const p = s.players.get(cur);
+    if (!p || p.bankrupt) return null;
+    if (s.awaitingBuyTileId !== 255) return () => this.botBuyDecision(cur);
+    if (s.dice1 === 0 && s.dice2 === 0) return () => this.doRoll(cur);
+    return null;
+  }
+
+  // Покупает участок, если после покупки останется денежный резерв; иначе отказ (→ аукцион).
+  private botBuyDecision(id: string) {
+    const p = this.state.players.get(id);
+    const price = tileAt(this.state.awaitingBuyTileId).price || 0;
+    if (p && price > 0 && p.money - price >= GAME_CONFIG.botBuyReserve) this.doBuy(id);
+    else this.doDecline(id);
+  }
+
+  // На аукционе поднимает ставку на один шаг, пока не превысит номинал/бюджет; иначе пас.
+  private botAuction(id: string) {
+    const s = this.state;
+    if (s.auctionTileId === 255 || s.auctionBidders.indexOf(id) < 0) return;
+    const bot = s.players.get(id);
+    if (!bot) return;
+    const budget = Math.min(bot.money, tileAt(s.auctionTileId).price || 0); // не платить выше номинала
+    const next = s.auctionBid + AUCTION_STEPS[0];
+    if (s.auctionBidderId !== id && next <= budget) this.doAuctionBid(id, next);
+    else this.doAuctionPass(id);
+  }
+
+  // Принимает обмен, если получаемое (по номиналам) не меньше отдаваемого и хватает денег.
+  private botResolveTrade(id: string) {
+    const tr = this.state.trade;
+    const bot = this.state.players.get(id);
+    const val = (ids: number[]) => ids.reduce((sum, x) => sum + (tileAt(x).price || 0), 0);
+    const receive = val([...tr.offerProps]) + tr.offerMoney + tr.offerCards * GAME_CONFIG.jailFine;
+    const give = val([...tr.requestProps]) + tr.requestMoney + tr.requestCards * GAME_CONFIG.jailFine;
+    if (bot && bot.money >= tr.requestMoney && receive >= give) this.doAcceptTrade(id);
+    else this.doDeclineTrade(id);
   }
 
   // Клетка разрешена (и решение о покупке, если было, принято) — либо ещё один

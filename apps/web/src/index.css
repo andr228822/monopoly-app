@@ -330,3 +330,13 @@ li { padding: 6px 0; border-bottom: 1px solid #2c6b2c; }
 }
 .tradeToast.ok { border-color: #2a9d8f; color: #c8f250; }
 .tradeToast.no { border-color: #e63946; color: #ffb3b3; }
+
+/* Кнопка удаления бота из лобби */
+.kickBot {
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-size: 12px;
+  background: #e63946;
+  color: #fff;
+  border-radius: 10px;
+}

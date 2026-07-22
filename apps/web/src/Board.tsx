@@ -237,7 +237,7 @@ export function Board({
         <ul className="players">
           {players.map((p) => (
             <li key={p.id} style={{ color: colorOf(p.id) }}>
-              {p.name} — ${fmt(p.money)}
+              {p.isBot ? "🤖 " : ""}{p.name} — ${fmt(p.money)}
               {p.inJail ? " 🔒" : ""}
               {p.getOutCards > 0 ? ` 🃏×${p.getOutCards}` : ""}
               {p.bankrupt ? " 💀" : ""}

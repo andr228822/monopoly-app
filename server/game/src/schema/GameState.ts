@@ -13,6 +13,7 @@ export class Player extends Schema {
   @type("boolean") bankrupt = false;
   @type("boolean") inJail = false;
   @type("uint8") getOutCards = 0; // карт «выход из тюрьмы бесплатно» в запасе
+  @type("boolean") isBot = false; // бот-соперник (управляется сервером)
 
   // серверное (не синкается): порядок хода + счётчик неудачных попыток дубля в тюрьме
   turnIndex = 0;

@@ -84,13 +84,20 @@ export function App() {
         {game.snapshot.players.map((p) => (
           <li key={p.id}>
             {p.id === game.snapshot.hostId ? "👑 " : ""}
-            {p.name} {p.id === game.mySessionId ? "(ты)" : ""} — {p.ready ? "✓ готов" : "не готов"}
+            {p.isBot ? "🤖 " : ""}
+            {p.name} {p.id === game.mySessionId ? "(ты)" : ""} — {p.isBot ? "бот" : p.ready ? "✓ готов" : "не готов"}
+            {isHost && p.isBot && game.snapshot.phase === "lobby" && (
+              <button className="kickBot" onClick={() => game.removeBot(p.id)}>✕</button>
+            )}
           </li>
         ))}
       </ul>
       {game.snapshot.phase === "lobby" && (
         <>
           <button onClick={() => game.setReady(!me?.ready)}>{me?.ready ? "Я не готов" : "Я готов"}</button>
+          {isHost && game.snapshot.players.length < game.snapshot.maxPlayers && (
+            <button onClick={game.addBot}>🤖 Добавить бота</button>
+          )}
           {isHost && <button onClick={game.startGame}>НАЧАТЬ</button>}
         </>
       )}

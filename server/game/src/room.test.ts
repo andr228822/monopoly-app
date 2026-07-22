@@ -454,6 +454,64 @@ describe("GameRoom (интеграция)", () => {
     await a.leave(); await b.leave();
   });
 
+  it("бот: хост добавляет и убирает бота в лобби", async () => {
+    const room = await colyseus.createRoom("game", {});
+    const a = await colyseus.connectTo(room, { name: "A" });
+    const b = await colyseus.connectTo(room, { name: "B" });
+    await settle(room);
+
+    b.send(ClientMsg.AddBot); // не-хост — игнор
+    await settle(room);
+    assert.equal(room.state.players.size, 2);
+
+    a.send(ClientMsg.AddBot); // хост
+    await settle(room);
+    assert.equal(room.state.players.size, 3);
+    const botId = [...room.state.players.keys()].find((id) => room.state.players.get(id)!.isBot)!;
+    assert.ok(botId);
+    assert.equal(room.state.players.get(botId)!.ready, true); // бот всегда готов
+
+    a.send(ClientMsg.RemoveBot, { botId });
+    await settle(room);
+    assert.equal(room.state.players.size, 2);
+    await a.leave(); await b.leave();
+  });
+
+  it("бот: сам разыгрывает свой ход и передаёт очередь человеку", async () => {
+    const room = await colyseus.createRoom("game", {});
+    const a = await colyseus.connectTo(room, { name: "A" });
+    await settle(room);
+    a.send(ClientMsg.AddBot);
+    await settle(room);
+    const botId = [...room.state.players.keys()].find((id) => room.state.players.get(id)!.isBot)!;
+
+    a.send(ClientMsg.SetReady, { ready: true });
+    await settle(room);
+    a.send(ClientMsg.StartGame);
+    await new Promise((r) => setTimeout(r, GAME_CONFIG.countdownMs + 200));
+    await settle(room);
+    assert.equal(room.state.phase, "playing");
+    assert.equal(room.state.currentPlayerId, a.sessionId);
+
+    // Держим кубики (2,3) на весь отрезок — и ход A, и автоход бота детерминированы (не дубль).
+    const restore = mockDice(2, 3);
+    a.send(ClientMsg.RollDice); // A -> клетка 5, покупает
+    await settle(room);
+    a.send(ClientMsg.BuyProperty);
+    await new Promise((r) => setTimeout(r, GAME_CONFIG.resolveDelayMs + 300));
+    await settle(room);
+    assert.equal(room.state.currentPlayerId, botId); // ход у бота
+
+    // Ждём, пока бот сам сходит (бросок + разрешение клетки + авто-передача хода).
+    await new Promise((r) => setTimeout(r, GAME_CONFIG.botDelayMs + GAME_CONFIG.resolveDelayMs + 1200));
+    await settle(room);
+    restore();
+    const bot = room.state.players.get(botId)!;
+    assert.notEqual(bot.position, 0);                       // бот действительно походил
+    assert.equal(room.state.currentPlayerId, a.sessionId);  // очередь вернулась к человеку
+    await a.leave();
+  });
+
   it("выход хоста: игрок удаляется, хост переназначается", async () => {
     const room = await colyseus.createRoom("game", {});
     const a = await colyseus.connectTo(room, { name: "A" });

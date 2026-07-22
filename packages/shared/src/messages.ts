@@ -13,6 +13,9 @@ export type Phase = (typeof Phase)[keyof typeof Phase];
 export const ClientMsg = {
   SetReady: "set_ready",
   StartGame: "start_game",
+  AddBot: "add_bot",              // хост добавляет бота-соперника в лобби (Фаза 5)
+  RemoveBot: "remove_bot",        // хост убирает бота из лобби
+
   RollDice: "roll_dice",
   BuyProperty: "buy_property",
   DeclineBuy: "decline_buy",
