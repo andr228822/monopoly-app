@@ -22,6 +22,8 @@ export const ClientMsg = {
   Unmortgage: "unmortgage",       // выкупить залог (55% цены)
   BuildHouse: "build_house",      // построить дом/отель
   SellHouse: "sell_house",        // продать дом/отель (половина цены)
+  AuctionBid: "auction_bid",      // поднять ставку на аукционе
+  AuctionPass: "auction_pass",    // выйти из аукциона
 } as const;
 
 export const ServerMsg = {

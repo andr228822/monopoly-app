@@ -152,11 +152,11 @@ describe("GameRoom (интеграция)", () => {
     await new Promise((r) => setTimeout(r, GAME_CONFIG.countdownMs + 200));
     await settle(room);
 
-    let restore = mockDice(3, 3); // дубль -> клетка 6 (недвижимость, но денег хватает — покупка спросится)
+    let restore = mockDice(3, 3); // дубль -> клетка 6 (недвижимость, покупка спросится)
     a.send(ClientMsg.RollDice);
     await settle(room);
     restore();
-    a.send(ClientMsg.DeclineBuy); // не покупаем, чтобы не мешало проверке
+    a.send(ClientMsg.BuyProperty); // покупаем (отказ теперь запускает аукцион — не мешаем проверке дубля)
 
     await new Promise((r) => setTimeout(r, GAME_CONFIG.resolveDelayMs + 200));
     await settle(room);
@@ -185,7 +185,7 @@ describe("GameRoom (интеграция)", () => {
       a.send(ClientMsg.RollDice);
       await settle(room);
       restore();
-      if (room.state.awaitingBuyTileId !== 255) a.send(ClientMsg.DeclineBuy);
+      if (room.state.awaitingBuyTileId !== 255) a.send(ClientMsg.BuyProperty); // покупаем (отказ = аукцион)
       await new Promise((r) => setTimeout(r, GAME_CONFIG.resolveDelayMs + 200));
       await settle(room);
       assert.equal(room.state.currentPlayerId, a.sessionId); // всё ещё её ход (1-й и 2-й дубль)
@@ -318,6 +318,50 @@ describe("GameRoom (интеграция)", () => {
     await settle(room);
     assert.equal(room.state.properties.get("5").mortgaged, true);
     assert.equal(pa.money, before + mortgageValue(tileAt(5).price!));
+    await a.leave(); await b.leave();
+  });
+
+  it("аукцион: отказ от покупки → торги → победитель получает клетку", async () => {
+    const { room, a, b } = await startedGame();
+    const restore = mockDice(2, 3); // A -> клетка 5 (ж/д, 200000)
+    a.send(ClientMsg.RollDice);
+    await settle(room);
+    restore();
+    assert.equal(room.state.awaitingBuyTileId, 5);
+
+    a.send(ClientMsg.DeclineBuy); // отказ → аукцион
+    await settle(room);
+    assert.equal(room.state.auctionTileId, 5);
+    assert.equal(room.state.auctionBidders.length, 2);
+
+    const pb = room.state.players.get(b.sessionId);
+    b.send(ClientMsg.AuctionBid, { amount: 100000 });
+    await settle(room);
+    assert.equal(room.state.auctionBidderId, b.sessionId);
+    assert.equal(room.state.auctionBid, 100000);
+
+    a.send(ClientMsg.AuctionPass); // остаётся один B → конец
+    await settle(room);
+    assert.equal(room.state.auctionTileId, 255);
+    assert.equal(room.state.properties.get("5").ownerId, b.sessionId);
+    assert.equal(pb.money, GAME_CONFIG.startingMoney - 100000);
+    await a.leave(); await b.leave();
+  });
+
+  it("аукцион без ставок — продажи нет, ход продолжается", async () => {
+    const { room, a, b } = await startedGame();
+    const restore = mockDice(2, 3);
+    a.send(ClientMsg.RollDice);
+    await settle(room);
+    restore();
+    a.send(ClientMsg.DeclineBuy);
+    await settle(room);
+    assert.equal(room.state.auctionTileId, 5);
+
+    b.send(ClientMsg.AuctionPass); // B пасует без ставки → остаётся A (тоже без ставки) → конец
+    await settle(room);
+    assert.equal(room.state.auctionTileId, 255);
+    assert.equal(room.state.properties.get("5"), undefined); // никто не купил
     await a.leave(); await b.leave();
   });
 

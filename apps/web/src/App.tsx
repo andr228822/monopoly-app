@@ -48,6 +48,11 @@ export function App() {
           lastMove={game.lastMove}
           lastTurnStart={game.lastTurnStart}
           lastCard={game.lastCard}
+          auctionTileId={game.snapshot.auctionTileId}
+          auctionBid={game.snapshot.auctionBid}
+          auctionBidderId={game.snapshot.auctionBidderId}
+          auctionBidders={game.snapshot.auctionBidders}
+          auctionDeadline={game.snapshot.auctionDeadline}
           onRoll={game.rollDice}
           onBuy={game.buyProperty}
           onDecline={game.declineBuy}
@@ -57,6 +62,8 @@ export function App() {
           onUnmortgage={game.unmortgage}
           onBuildHouse={game.buildHouse}
           onSellHouse={game.sellHouse}
+          onAuctionBid={game.auctionBid}
+          onAuctionPass={game.auctionPass}
         />
       </div>
     );

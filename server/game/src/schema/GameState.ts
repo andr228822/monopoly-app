@@ -1,4 +1,4 @@
-import { Schema, MapSchema, type } from "@colyseus/schema";
+import { Schema, MapSchema, ArraySchema, type } from "@colyseus/schema";
 import { GAME_CONFIG } from "@monopoly/shared";
 
 // Синхронизируемое состояние комнаты.
@@ -40,4 +40,11 @@ export class GameState extends Schema {
   @type("uint8") awaitingBuyTileId = 255; // 255 = нет ожидающего решения о покупке
   @type({ map: PropertyState }) properties = new MapSchema<PropertyState>();
   @type("string") winnerId = "";
+
+  // Аукцион (Фаза 3): 255 = нет активного аукциона.
+  @type("uint8") auctionTileId = 255;
+  @type("int32") auctionBid = 0;
+  @type("string") auctionBidderId = ""; // текущий лидер ("" = ставок нет)
+  @type(["string"]) auctionBidders = new ArraySchema<string>(); // кто ещё в торгах
+  @type("uint32") auctionDeadline = 0;  // ms epoch — для отсчёта на клиенте
 }

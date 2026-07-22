@@ -146,6 +146,38 @@ li { padding: 6px 0; border-bottom: 1px solid #2c6b2c; }
 .cardToastTitle { font-size: 15px; font-weight: 800; opacity: 0.85; margin-bottom: 6px; }
 .cardToastText { font-size: 18px; font-weight: 700; line-height: 1.3; }
 .cardToastWho { font-size: 13px; margin-top: 8px; opacity: 0.7; }
+
+/* ── Аукцион ── */
+.auctionOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.55);
+}
+.auctionBox {
+  min-width: 300px;
+  max-width: 400px;
+  padding: 22px 24px;
+  border-radius: 16px;
+  background: #0e2f12;
+  border: 3px solid #f4a261;
+  box-shadow: 0 12px 34px rgba(0,0,0,0.6);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.auctionTitle { font-size: 22px; font-weight: 800; }
+.auctionTile { font-size: 15px; }
+.auctionBid { font-size: 18px; }
+.auctionBid b { color: #c8f250; }
+.auctionTimer { font-size: 14px; color: #f4a261; font-weight: 700; }
+.auctionBtns { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.auctionPass { background: #e63946; color: #fff; align-self: center; }
+.auctionWho { font-size: 12px; opacity: 0.7; }
 @keyframes cardPop {
   0% { transform: translateX(-50%) scale(0.7); opacity: 0; }
   100% { transform: translateX(-50%) scale(1); opacity: 1; }

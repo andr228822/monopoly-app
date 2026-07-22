@@ -31,6 +31,11 @@ export interface GameSnapshot {
   awaitingBuyTileId: number;
   properties: Record<number, PropView>; // tileId -> владение (владелец/дома/залог)
   winnerId: string;
+  auctionTileId: number;   // 255 = нет аукциона
+  auctionBid: number;
+  auctionBidderId: string;
+  auctionBidders: string[];
+  auctionDeadline: number;
 }
 
 export type Status = "idle" | "connecting" | "connected" | "error";
@@ -45,6 +50,7 @@ export interface CardEvent { playerId: string; deck: "chance" | "chest"; text: s
 const EMPTY: GameSnapshot = {
   phase: Phase.Lobby, lobbyName: "", code: "", maxPlayers: 6, hostId: "", players: [],
   currentPlayerId: "", dice1: 0, dice2: 0, awaitingBuyTileId: 255, properties: {}, winnerId: "",
+  auctionTileId: 255, auctionBid: 0, auctionBidderId: "", auctionBidders: [], auctionDeadline: 0,
 };
 
 // Хук подключения к игровому серверу. Зеркалит состояние комнаты в React.
@@ -93,6 +99,11 @@ export function useGame() {
       awaitingBuyTileId: state.awaitingBuyTileId ?? 255,
       properties,
       winnerId: state.winnerId ?? "",
+      auctionTileId: state.auctionTileId ?? 255,
+      auctionBid: state.auctionBid ?? 0,
+      auctionBidderId: state.auctionBidderId ?? "",
+      auctionBidders: state.auctionBidders ? [...state.auctionBidders] : [],
+      auctionDeadline: state.auctionDeadline ?? 0,
     });
   }, []);
 
@@ -182,6 +193,12 @@ export function useGame() {
   const sellHouse = useCallback((tileId: number) => {
     roomRef.current?.send(ClientMsg.SellHouse, { tileId });
   }, []);
+  const auctionBid = useCallback((amount: number) => {
+    roomRef.current?.send(ClientMsg.AuctionBid, { amount });
+  }, []);
+  const auctionPass = useCallback(() => {
+    roomRef.current?.send(ClientMsg.AuctionPass);
+  }, []);
 
   const leave = useCallback(() => {
     try { roomRef.current?.leave(); } catch {}
@@ -196,7 +213,7 @@ export function useGame() {
     status, error, snapshot, mySessionId, lastRoll, lastMove, lastTurnStart, lastCard,
     createGame, joinByCode, setReady, startGame,
     rollDice, buyProperty, declineBuy, payJailFine, useJailCard,
-    mortgage, unmortgage, buildHouse, sellHouse,
+    mortgage, unmortgage, buildHouse, sellHouse, auctionBid, auctionPass,
     leave,
   };
 }

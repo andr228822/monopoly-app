@@ -30,6 +30,7 @@ export class GameRoom extends Room<GameState> {
   private turnOrder: string[] = [];
   private turnMs: number = GAME_CONFIG.turnMs;
   private turnTimer?: any;
+  private auctionTimer?: any;
   private turnDoubles = 0; // подряд выпавших дублей у текущего игрока в этом ходу
   // Что делать после разрешения клетки (может ждать решения о покупке — см. afterResolve).
   private pendingResolution: "advance" | "reroll" | null = null;
@@ -98,6 +99,15 @@ export class GameRoom extends Room<GameState> {
       if (this.rateLimited(client)) return;
       this.handleSellHouse(client, Number(msg?.tileId));
     });
+
+    this.onMessage(ClientMsg.AuctionBid, (client, msg: { amount?: number }) => {
+      if (this.rateLimited(client)) return;
+      this.handleAuctionBid(client, Number(msg?.amount));
+    });
+    this.onMessage(ClientMsg.AuctionPass, (client) => {
+      if (this.rateLimited(client)) return;
+      this.handleAuctionPass(client);
+    });
   }
 
   private rateLimited(client: Client): boolean {
@@ -150,6 +160,13 @@ export class GameRoom extends Room<GameState> {
     if (this.state.hostId === sessionId) {
       this.state.hostId = [...this.state.players.keys()][0] || "";
     }
+    // если ушедший участвовал в аукционе — убираем и, возможно, завершаем.
+    if (this.state.auctionTileId !== 255) {
+      const i = this.state.auctionBidders.indexOf(sessionId);
+      if (i >= 0) this.state.auctionBidders.splice(i, 1);
+      if (this.state.auctionBidderId === sessionId) { this.state.auctionBidderId = ""; this.state.auctionBid = 0; }
+      if (this.state.auctionBidders.length <= 1) this.finishAuction();
+    }
   }
 
   private setPhase(phase: Phase) {
@@ -193,6 +210,7 @@ export class GameRoom extends Room<GameState> {
     this.state.dice1 = 0;
     this.state.dice2 = 0;
     this.state.awaitingBuyTileId = 255;
+    this.clearAuction();
     this.state.currentPlayerId = this.turnOrder[0] || "";
     this.turnDoubles = 0;
     this.pendingResolution = null;
@@ -256,7 +274,7 @@ export class GameRoom extends Room<GameState> {
     this.movePlayer(p, from, to, passedGo);
 
     this.resolveTile(p, d1, d2);
-    if (this.state.awaitingBuyTileId === 255 && this.state.currentPlayerId === p.id) this.afterResolve(p);
+    if (this.state.awaitingBuyTileId === 255 && this.state.auctionTileId === 255 && this.state.currentPlayerId === p.id) this.afterResolve(p);
   }
 
   // Бросок кубиков, когда игрок в тюрьме: дубль → выход и ход этим броском;
@@ -281,7 +299,7 @@ export class GameRoom extends Room<GameState> {
     const { to, passedGo } = computeMove(p.position, d1, d2);
     this.movePlayer(p, from, to, passedGo);
     this.resolveTile(p, d1, d2);
-    if (this.state.awaitingBuyTileId === 255 && this.state.currentPlayerId === p.id) this.afterResolve(p);
+    if (this.state.awaitingBuyTileId === 255 && this.state.auctionTileId === 255 && this.state.currentPlayerId === p.id) this.afterResolve(p);
   }
 
   // Перемещение фишки: обновляет позицию, бонус за проход Старта, шлёт анимацию.
@@ -314,7 +332,9 @@ export class GameRoom extends Room<GameState> {
       const prop = this.state.properties.get(String(tile.id));
       const ownerId = prop?.ownerId || "";
       if (!ownerId) {
+        // хватает денег — предлагаем купить; не хватает — сразу на аукцион.
         if (p.money >= (tile.price || 0)) this.state.awaitingBuyTileId = tile.id;
+        else this.startAuction(tile.id);
       } else if (ownerId !== p.id) {
         const owner = this.state.players.get(ownerId);
         if (owner && !owner.bankrupt) this.payRent(p, owner, rentFor(tile, this.propsView(), d1, d2), tile.id);
@@ -440,10 +460,9 @@ export class GameRoom extends Room<GameState> {
 
   private handleDeclineBuy(client: Client) {
     if (!this.isMyTurnWithPendingBuy(client)) return;
-    const p = this.state.players.get(client.sessionId);
-    if (!p) return;
+    const tileId = this.state.awaitingBuyTileId;
     this.state.awaitingBuyTileId = 255;
-    this.afterResolve(p);
+    this.startAuction(tileId); // отказавшийся тоже участвует в торгах
   }
 
   // В тюрьме до броска: заплатить штраф — выйти. Дальше игрок ещё бросает и ходит.
@@ -520,6 +539,78 @@ export class GameRoom extends Room<GameState> {
     if (!prop) return;
     prop.houses -= 1;
     p.money += Math.floor((tileAt(tileId).houseCost || 0) / 2); // продажа за полцены
+  }
+
+  // ── Аукцион (при отказе от покупки / нехватке денег) ──
+  private startAuction(tileId: number) {
+    if (this.turnTimer) { this.turnTimer.clear(); this.turnTimer = undefined; } // таймер хода на паузу
+    this.state.auctionTileId = tileId;
+    this.state.auctionBid = 0;
+    this.state.auctionBidderId = "";
+    this.state.auctionBidders.clear();
+    for (const pl of this.state.players.values()) if (!pl.bankrupt) this.state.auctionBidders.push(pl.id);
+    if (this.state.auctionBidders.length === 0) { this.finishAuction(); return; }
+    this.resetAuctionTimer();
+    console.log(`[room ${this.roomId}] аукцион: клетка ${tileId}, участников ${this.state.auctionBidders.length}`);
+  }
+
+  private resetAuctionTimer() {
+    if (this.auctionTimer) { this.auctionTimer.clear(); this.auctionTimer = undefined; }
+    // Секунды, а не мс: эпоха в мс не влезает в uint32 (переполнение → таймер «0с»).
+    this.state.auctionDeadline = Math.floor((Date.now() + GAME_CONFIG.auctionMs) / 1000);
+    this.auctionTimer = this.clock.setTimeout(() => this.finishAuction(), GAME_CONFIG.auctionMs);
+  }
+
+  private handleAuctionBid(client: Client, amount: number) {
+    if (this.state.phase !== Phase.Playing || this.state.auctionTileId === 255) return;
+    const p = this.state.players.get(client.sessionId);
+    if (!p || p.bankrupt) return;
+    if (this.state.auctionBidders.indexOf(p.id) < 0) return; // уже вышел из торгов
+    if (!Number.isFinite(amount) || amount <= this.state.auctionBid || amount > p.money) return;
+    this.state.auctionBid = Math.floor(amount);
+    this.state.auctionBidderId = p.id;
+    this.resetAuctionTimer();
+  }
+
+  private handleAuctionPass(client: Client) {
+    if (this.state.phase !== Phase.Playing || this.state.auctionTileId === 255) return;
+    const i = this.state.auctionBidders.indexOf(client.sessionId);
+    if (i < 0) return;
+    this.state.auctionBidders.splice(i, 1);
+    // остался один участник (обычно лидер) или ноль — завершаем.
+    if (this.state.auctionBidders.length <= 1) this.finishAuction();
+  }
+
+  private finishAuction() {
+    const tileId = this.state.auctionTileId;
+    if (tileId === 255) return;
+    const bidderId = this.state.auctionBidderId;
+    const bid = this.state.auctionBid;
+    const resumeId = this.state.currentPlayerId;
+
+    if (bidderId && bid > 0) {
+      const winner = this.state.players.get(bidderId);
+      if (winner && !winner.bankrupt && winner.money >= bid) {
+        winner.money -= bid;
+        let prop = this.state.properties.get(String(tileId));
+        if (!prop) { prop = new PropertyState(); this.state.properties.set(String(tileId), prop); }
+        prop.ownerId = winner.id;
+        console.log(`[room ${this.roomId}] аукцион: ${winner.name} выиграл клетку ${tileId} за ${bid}`);
+      }
+    }
+    this.clearAuction();
+    // возобновляем прерванный ход того, кто попал на клетку.
+    const p = this.state.players.get(resumeId);
+    if (p && this.state.phase === Phase.Playing) this.afterResolve(p);
+  }
+
+  private clearAuction() {
+    if (this.auctionTimer) { this.auctionTimer.clear(); this.auctionTimer = undefined; }
+    this.state.auctionTileId = 255;
+    this.state.auctionBid = 0;
+    this.state.auctionBidderId = "";
+    this.state.auctionBidders.clear();
+    this.state.auctionDeadline = 0;
   }
 
   // Клетка разрешена (и решение о покупке, если было, принято) — либо ещё один

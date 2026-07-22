@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { BOARD, TileType, GAME_CONFIG, groupTiles } from "@monopoly/shared";
+import { BOARD, TileType, GAME_CONFIG, groupTiles, AUCTION_STEPS } from "@monopoly/shared";
 import type { PropView } from "./net/useGame";
 
 const JAIL_FINE = GAME_CONFIG.jailFine;
@@ -48,8 +48,9 @@ function pickTwoQuadrants(rng: () => number): [{ left: number; top: number }, { 
 export function Board({
   players, properties, currentPlayerId, mySessionId,
   dice1, dice2, awaitingBuyTileId, phase, winnerId, lastRoll, lastMove, lastTurnStart, lastCard,
+  auctionTileId, auctionBid, auctionBidderId, auctionBidders, auctionDeadline,
   onRoll, onBuy, onDecline, onPayJailFine, onUseJailCard,
-  onMortgage, onUnmortgage, onBuildHouse, onSellHouse,
+  onMortgage, onUnmortgage, onBuildHouse, onSellHouse, onAuctionBid, onAuctionPass,
 }: {
   players: PlayerView[];
   properties: Record<number, PropView>;
@@ -64,6 +65,11 @@ export function Board({
   lastMove: MoveEvent | null;
   lastTurnStart: TurnStartEvent | null;
   lastCard: CardEvent | null;
+  auctionTileId: number;
+  auctionBid: number;
+  auctionBidderId: string;
+  auctionBidders: string[];
+  auctionDeadline: number;
   onRoll: () => void;
   onBuy: () => void;
   onDecline: () => void;
@@ -73,6 +79,8 @@ export function Board({
   onUnmortgage: (tileId: number) => void;
   onBuildHouse: (tileId: number) => void;
   onSellHouse: (tileId: number) => void;
+  onAuctionBid: (amount: number) => void;
+  onAuctionPass: () => void;
 }) {
   const colorOf = (playerId: string) => PLAYER_COLORS[players.findIndex((p) => p.id === playerId) % PLAYER_COLORS.length];
   const isMyTurn = currentPlayerId === mySessionId;
@@ -248,6 +256,47 @@ export function Board({
           <div className="cardToastWho">{players.find((p) => p.id === card.playerId)?.name || ""}</div>
         </div>
       )}
+
+      {auctionTileId !== 255 && (() => {
+        const t = BOARD[auctionTileId];
+        const amIn = auctionBidders.includes(mySessionId);
+        const leaderName = auctionBidderId ? players.find((p) => p.id === auctionBidderId)?.name : null;
+        const secs = Math.max(0, auctionDeadline - Math.floor(now / 1000)); // auctionDeadline — эпоха в секундах
+        return (
+          <div className="auctionOverlay">
+            <div className="auctionBox">
+              <div className="auctionTitle">🔨 Аукцион</div>
+              <div className="auctionTile">«{t.name}» — цена ${fmt(t.price || 0)}</div>
+              <div className="auctionBid">
+                {auctionBid > 0
+                  ? <>Ставка: <b>${fmt(auctionBid)}</b> — {leaderName}</>
+                  : "Ставок пока нет"}
+              </div>
+              <div className="auctionTimer">⏱ {secs}с</div>
+              {amIn ? (
+                <>
+                  <div className="auctionBtns">
+                    {AUCTION_STEPS.map((step) => {
+                      const next = auctionBid + step;
+                      return (
+                        <button key={step} disabled={(me?.money ?? 0) < next} onClick={() => onAuctionBid(next)}>
+                          +${fmt(step)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button className="auctionPass" onClick={onAuctionPass}>Пас</button>
+                </>
+              ) : (
+                <div className="note">Ты вышел из торгов</div>
+              )}
+              <div className="auctionWho">
+                В торгах: {auctionBidders.map((id) => players.find((p) => p.id === id)?.name).filter(Boolean).join(", ") || "—"}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
